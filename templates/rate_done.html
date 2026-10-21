@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Rate</h1>
+<div class="panel">
+  {% if skipped %}
+    <p>You've gone through every unrated job ({{ skipped }} skipped).
+       <a href="{{ url_for('rate_queue') }}">Start over</a> to see the skipped ones again.</p>
+  {% else %}
+    <p>Nothing to rate. Every scored job has your rating.</p>
+  {% endif %}
+  <p class="subtle">Score more on the <a href="{{ url_for('score_page') }}">Score</a> page, or turn your
+     ratings into rules on the <a href="{{ url_for('feedback_page') }}">Feedback</a> page.</p>
+</div>
+{% endblock %}

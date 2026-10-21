@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% from "_macros.html" import tracker %}
+{% block title %}Application · {{ draft.company_name }}{% endblock %}
+{% block content %}
+<h1>{{ draft.role_title }} · {{ draft.company_name }}</h1>
+<p class="subtle">
+  <a href="{{ url_for('job_detail', job_id=job.id) }}">Job details</a> ·
+  <a href="{{ job.url }}" target="_blank" rel="noopener">Posting ↗</a> ·
+  drafted by {{ app.model }} · last edited {{ app.updated_at[:16].replace('T', ' ') }} UTC
+</p>
+
+{{ tracker(job, events) }}
+
+{% if rendered %}
+<div class="panel row" style="justify-content:space-between; align-items:center">
+  <div>
+    <h2 style="margin-bottom:4px">Final PDFs</h2>
+    <div class="small subtle">Generated {{ app.rendered_at[:16].replace('T', ' ') }} UTC. Edit below and generate again any time.</div>
+  </div>
+  <div class="row">
+    {% if rendered.resume %}<a class="button" href="{{ url_for('application_file', job_id=job.id, kind='resume') }}" target="_blank">Resume PDF</a>{% endif %}
+    {% if rendered.cover %}<a class="button" href="{{ url_for('application_file', job_id=job.id, kind='cover') }}" target="_blank">Cover letter PDF</a>{% endif %}
+    <form method="post" action="{{ url_for('application_open_folder', job_id=job.id) }}" style="margin:0">
+      <button class="secondary" type="submit">Open folder</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if draft.letter_plan %}
+<div class="panel">
+  <h2>How each paragraph answers the posting</h2>
+  <p class="small subtle">The drafter's plan. Every paragraph should answer a specific line in the posting
+    and show why you're a great candidate for it. If a tie looks vague, that paragraph needs work.</p>
+  <table>
+    <thead><tr><th class="num">¶</th><th>Uses</th><th>Answers this (posting or company research)</th><th>Why it makes you a great candidate</th></tr></thead>
+    <tbody>
+      {% for p in draft.letter_plan %}
+      <tr>
+        <td class="num">{{ p.paragraph }}</td>
+        <td class="small">{{ p.content }}</td>
+        <td class="small">“{{ p.answers }}”{% if p.get('from') == 'research' %} <span class="subtle">(company research)</span>{% endif %}</td>
+        <td class="small">{{ p.why_great }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% set research = review.research %}
+{% if research %}
+<details class="panel" {{ 'open' if research.status != 'complete' }}>
+  <summary><strong>Company research</strong>
+    <span class="small subtle">· {{ research.facts | length }} sourced facts
+      {% if research.at %}· {{ research.at[:10] }}{% endif %}
+      {% if research.status == 'failed' %}· failed: {{ research.error }}{% elif research.status != 'complete' %}· incomplete{% endif %}</span></summary>
+  <p class="small subtle">What the drafter knew about the company, from the web. Each quote was checked against its
+    page: <em>found</em> means it's there; <em>unchecked</em> means the site blocked the check, so open the link
+    if the letter leans on it. Quotes that weren't on their page were dropped.</p>
+  {% if research.overview %}<p>{{ research.overview }}</p>{% endif %}
+  <ul class="small">
+    {% for f in research.facts %}
+    <li><strong>{{ f.category.replace('_', ' ') }}</strong>{% if f.date %} ({{ f.date }}){% endif %}: {{ f.point }}
+      <span class="subtle">“{{ f.quote }}” ·
+        <a href="{{ f.source }}" target="_blank" rel="noopener">source</a> · {{ f.checked }}</span></li>
+    {% endfor %}
+  </ul>
+  {% if research.gaps %}
+    <label>Couldn't find</label>
+    <ul class="small subtle">{% for g in research.gaps %}<li>{{ g }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if research.dropped %}
+    <p class="small subtle">Dropped {{ research.dropped | length }} fact(s) whose quote wasn't on the page.</p>
+  {% endif %}
+</details>
+{% endif %}
+
+{% if draft.profile_updates %}
+<div class="panel">
+  <h2>Add to your profile?</h2>
+  <p class="small subtle">Things you wrote in your notes that full-profile.md doesn't have yet. Nothing was
+    changed; add the ones you want (in your own words) so future drafts can use them.</p>
+  <ul class="small">
+    {% for u in draft.profile_updates %}
+    <li>{{ u.fact }}{% if u.section %} <span class="subtle">→ {{ u.section }}</span>{% endif %}
+      {% if u.his_words %}<div class="subtle">Your words: “{{ u.his_words }}”</div>{% endif %}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% set must_fix = review.issues | selectattr('severity', 'equalto', 'must_fix') | list %}
+{% set suggestions = review.issues | selectattr('severity', 'equalto', 'suggestion') | list %}
+{% if must_fix or suggestions or review.warnings or draft.notes_for_candidate %}
+<div class="panel">
+  <h2>Review notes</h2>
+  {% if must_fix %}
+    <label>Fixed by the truth check (already applied; check you agree)</label>
+    <ul class="small">{% for i in must_fix %}<li><strong>{{ i.location }}</strong>: {{ i.problem }}{% if i.fix %} <span class="subtle">→ {{ i.fix }}</span>{% endif %}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if review.warnings %}
+    <label>Final checks</label>
+    <ul class="small">{% for w in review.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if suggestions %}
+    <label>Suggestions (not applied)</label>
+    <ul class="small">{% for i in suggestions %}<li><strong>{{ i.location }}</strong>: {{ i.problem }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if draft.notes_for_candidate %}
+    <label>Notes from the drafter</label>
+    <ul class="small">{% for n in draft.notes_for_candidate %}<li>{{ n }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('application_save', job_id=job.id) }}" class="editor">
+  <div class="panel">
+    <h2>Resume</h2>
+    <label for="summary">Summary</label>
+    <textarea id="summary" name="summary" rows="3">{{ draft.resume.summary }}</textarea>
+
+    <label style="margin-top:12px">Projects <span class="subtle">(clear both boxes to remove one)</span></label>
+    {% for p in draft.resume.projects %}
+      <div class="item">
+        <input type="text" name="project_name_{{ loop.index0 }}" value="{{ p.name }}">
+        <textarea name="project_description_{{ loop.index0 }}" rows="2">{{ p.description }}</textarea>
+        {% if p.source %}<div class="small subtle">from: {{ p.source }}</div>{% endif %}
+      </div>
+    {% endfor %}
+
+    <label style="margin-top:12px">Experience</label>
+    {% for e in draft.resume.experience %}
+      <div class="item">
+        <input type="text" name="exp_heading_{{ loop.index0 }}" value="{{ e.heading }}">
+        <textarea name="exp_description_{{ loop.index0 }}" rows="2">{{ e.description }}</textarea>
+      </div>
+    {% endfor %}
+
+    <div class="grid2" style="margin-top:12px">
+      <div>
+        <label for="skills">Skills <span class="subtle">(one per line)</span></label>
+        <textarea id="skills" name="skills" rows="8">{{ draft.resume.skills | join('\n') }}</textarea>
+      </div>
+      <div>
+        <label for="education">Education</label>
+        <input type="text" id="education" name="education" value="{{ draft.resume.education }}" style="width:100%">
+        <label for="coursework" style="margin-top:10px">Relevant coursework <span class="subtle">(comma-separated)</span></label>
+        <textarea id="coursework" name="coursework" rows="4">{{ draft.resume.coursework | join(', ') }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  {% if draft.cover_letter %}
+  <div class="panel">
+    <h2>Cover letter</h2>
+    <label class="checkbox">
+      <input type="checkbox" name="show_header" value="1" {{ 'checked' if draft.cover_letter.get('show_header', true) }}>
+      Include the header (name, contact info, and date) at the top of the letter
+    </label>
+    <label for="greeting">Greeting</label>
+    <input type="text" id="greeting" name="greeting" value="{{ draft.cover_letter.greeting }}" style="width:100%">
+    <label for="paragraphs" style="margin-top:10px">Body <span class="subtle">(blank line between paragraphs)</span></label>
+    <textarea id="paragraphs" name="paragraphs" rows="20">{{ draft.cover_letter.paragraphs | join('\n\n') }}</textarea>
+    <label for="closing" style="margin-top:10px">Closing</label>
+    <input type="text" id="closing" name="closing" value="{{ draft.cover_letter.closing }}">
+    <p class="small subtle" id="wordcount"></p>
+  </div>
+  {% else %}
+  <p class="small subtle">Resume only: this draft has no cover letter. Redraft below without
+    “Resume only” checked if you need one.</p>
+  {% endif %}
+
+  <div class="panel row" style="justify-content:space-between; align-items:center">
+    <div class="small subtle">Saved drafts are kept; generating writes PDFs to applications/{{ draft.company_name }} - {{ draft.role_title }}/</div>
+    <div class="row">
+      <button class="secondary" type="submit" name="action" value="save">Save edits</button>
+      {% if draft.cover_letter %}
+      <button class="secondary" type="submit" name="action" value="feedback"
+              title="Saves your edits, then has Claude review the cover letter (about a minute)">Get feedback on the letter</button>
+      {% endif %}
+      <button type="submit" name="action" value="render">Save & generate PDFs</button>
+    </div>
+  </div>
+</form>
+
+{% set fb = review.letter_feedback %}
+{% if draft.cover_letter and (fb or review.last_revision) %}
+<div class="panel" id="feedback">
+  <h2>Cover letter feedback</h2>
+  {% if fb %}
+    <p class="small subtle">Reviewed {{ fb.at[:16].replace('T', ' ') }} UTC by {{ fb.model }}.</p>
+    <p>{{ fb.overall }}</p>
+    {% if fb.strengths %}
+      <label>What works</label>
+      <ul class="small">{% for s in fb.strengths %}<li>{{ s }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if fb.issues %}
+      <label>What to fix</label>
+      <ul class="feedback-issues">
+        {% for i in fb.issues %}
+          <li>
+            <span class="sev {{ i.severity }}">{{ i.severity }}</span>
+            <strong>{{ i.where }}</strong>
+            {% if i.quote %}<span class="subtle">“{{ i.quote }}”</span>{% endif %}
+            <div>{{ i.problem }}</div>
+            {% if i.suggestion %}<div class="subtle">Suggestion: {{ i.suggestion }}</div>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  {% elif review.last_revision %}
+    <p class="small subtle">Revised {{ review.last_revision.at[:16].replace('T', ' ') }} UTC with this feedback:</p>
+    <pre class="prompt" style="max-height:160px">{{ review.last_revision.feedback }}</pre>
+    <p class="small subtle">Click “Get feedback on the letter” to review the new version.</p>
+  {% endif %}
+
+  {% if fb %}
+  <form method="post" action="{{ url_for('application_revise', job_id=job.id) }}" style="margin-top:14px">
+    <label for="feedback-text">Revise the letter with this feedback <span class="subtle">(delete anything you
+      disagree with and add your own notes; only the cover letter changes, the resume stays as it is)</span></label>
+    <textarea id="feedback-text" name="feedback" rows="7">
+{%- for i in fb.issues if i.severity in ('high', 'medium') %}- {{ i.where }}: {{ i.suggestion or i.problem }}
+{% endfor %}</textarea>
+    <div style="margin-top:10px"><button type="submit">Revise the letter</button></div>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('draft_start', job_id=job.id) }}" class="panel"
+      onsubmit="return confirm('Write a new draft? Your edits to this one will be replaced.');">
+  <h2>Redraft</h2>
+  <label for="notes">Why this company? <span class="subtle">(your own words; the letter's personal part is built from this)</span></label>
+  <textarea id="notes" name="notes" rows="4" placeholder="What draws you to this company? Any personal connection to what they do?">{{ draft.candidate_notes or '' }}</textarea>
+  <div style="margin-top:8px"><label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1"{{ ' checked' if draft.resume_only }}>
+        Resume only, no cover letter <span class="subtle">(for applications that don't take one; faster,
+        since it skips the company research and the letter)</span></label></div>
+  <div class="row" style="margin-top:10px">
+    <select name="model"><option value="opus" selected>Opus</option><option value="sonnet">Sonnet</option></select>
+    <button class="secondary" type="submit">Redraft</button>
+  </div>
+</form>
+
+<script>
+  // Live word count for the cover letter body.
+  const body = document.getElementById("paragraphs");
+  if (body) {  // resume-only drafts have no letter
+    const count = () => document.getElementById("wordcount").textContent =
+      body.value.trim().split(/\s+/).filter(Boolean).length + " words (aim for 450–500)";
+    body.addEventListener("input", count); count();
+  }
+</script>
+{% endblock %}

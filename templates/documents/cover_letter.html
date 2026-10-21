@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ contact.name }} Cover Letter</title>
+<style>
+  /* Same header and font as the resume, so the two read as a set. */
+  @page { size: letter; margin: 0.9in 1in; }
+  body {
+    margin: 0;
+    font-family: Cambria, Georgia, serif;
+    font-size: {{ font_size + 0.5 }}pt;
+    line-height: 1.4;
+    color: #000;
+  }
+  header { text-align: center; margin-bottom: 18pt; padding-bottom: 8pt; border-bottom: 1px solid #000; }
+  h1 { font-size: 20pt; margin: 0 0 2pt; }
+  .contact { font-size: 10.5pt; }
+  .date { margin-bottom: 14pt; }
+  p { margin: 0 0 11pt; }
+  .closing { margin-top: 16pt; }
+</style>
+</head>
+<body>
+  {# The letterhead (name, contact lines, date) can be switched off per draft
+     in the editor; the letter then starts at the greeting. #}
+  {% if draft.cover_letter.get("show_header", true) %}
+  <header>
+    <h1>{{ contact.name }}</h1>
+    <div class="contact">
+      {{ [contact.location, contact.phone, contact.email] | select | join(" • ") }}<br>
+      {{ [contact.portfolio, contact.linkedin, contact.github] | select | join(" • ") }}
+    </div>
+  </header>
+
+  <p class="date">{{ today }}</p>
+  {% endif %}
+  <p>{{ draft.cover_letter.greeting }}</p>
+  {% for para in draft.cover_letter.paragraphs %}<p>{{ para }}</p>{% endfor %}
+  <p class="closing">{{ draft.cover_letter.closing }}<br>{{ contact.name }}</p>
+</body>
+</html>

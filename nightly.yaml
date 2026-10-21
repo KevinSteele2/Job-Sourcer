@@ -1,0 +1,21 @@
+# Settings for the nightly run (nightly.py, started by Windows Task Scheduler).
+# Edits take effect on the next run.
+
+steps:
+  targets: true           # every posting at the companies in companies.yaml (a minute or two)
+  import_simplify: true   # new listings from the SimplifyJobs list (seconds)
+  sweep: true             # wide sweep of ~15,900 boards (10-20 minutes)
+  check_open: true        # re-check top jobs are still open (under a minute)
+  score: true             # score new jobs with Claude (uses your plan)
+
+score:
+  # The cap: at most this many jobs per night, so a big night can't use up
+  # your Claude plan. Anything left waits for the next night.
+  limit: 60
+  batch_size: 10
+  model: sonnet           # sonnet, haiku (least quota), opus, or "" for Claude Code's default
+  # When you edit profile.md, feedback.md or the scoring prompt, jobs already
+  # scored this high are re-checked with the new version, up to recheck_limit
+  # a night (counted inside the limit above; new jobs go first).
+  recheck_min_score: 6
+  recheck_limit: 20

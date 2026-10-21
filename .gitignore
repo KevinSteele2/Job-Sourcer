@@ -1,0 +1,15 @@
+# Personal information: stays on this computer, never committed.
+full-profile.md
+profile.md
+feedback.md
+feedback.proposed.md
+*.pdf
+!Job Sourcer System Overview.pdf
+applications/
+
+# The database, fetched jobs, logs and run output.
+data/
+
+# Python's compiled cache.
+__pycache__/
+*.pyc

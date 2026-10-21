@@ -1,0 +1,69 @@
+{# Score pill, colored by band: 7+ good, 4-6 middling, 1-3 low. #}
+{% macro score_badge(value, big=false) -%}
+  {%- if value is none -%}
+    <span class="subtle">–</span>
+  {%- else -%}
+    <span class="score {{ 'good' if value >= 7 else 'mid' if value >= 4 else 'low' }} {{ 'big' if big }}">{{ value }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# How long ago a job was posted: "today", "3d", "5w". Green for the last 3
+   days. Falls back to when the job was first found (marked "found") when
+   the source gives no posting date. #}
+{% macro age_badge(posted_at, first_seen) -%}
+  {%- set days = (posted_at or first_seen) | days_ago -%}
+  {%- if days is not none -%}
+    {%- set label = 'today' if days == 0 else (days ~ 'd' if days < 30 else (days // 7) ~ 'w') -%}
+    <span class="age {{ 'fresh' if days <= 3 }}"
+          title="{{ ('Posted ' ~ (posted_at | local_date)) if posted_at else ('No posting date; first found ' ~ (first_seen | local_date)) }}">
+      {{- label if posted_at else 'found ' ~ label -}}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{# Status pill for the application tracker. #}
+{% macro status_pill(status) -%}
+  {%- if status -%}<span class="pill {{ status }}">{{ status | capitalize }}</span>{%- endif -%}
+{%- endmacro %}
+
+{# Application tracker panel: current status, update form, history, undo.
+   Used on the job page and the draft page. #}
+{% macro tracker(job, events) %}
+{% set next_status = {"applied": "interviewing", "interviewing": "offer"}.get(job.app_status, job.app_status) %}
+<div class="panel">
+  <div class="row" style="justify-content:space-between; align-items:flex-start">
+    <div>
+      <h2 style="margin-bottom:6px">Application status</h2>
+      {% if job.app_status %}
+        {{ status_pill(job.app_status) }}
+        <span class="small subtle">applied {{ job.applied_at[:10] }}</span>
+      {% else %}
+        <span class="small subtle">Not applied yet.</span>
+      {% endif %}
+    </div>
+    <form method="post" action="{{ url_for('job_status', job_id=job.id) }}" class="row" style="margin:0">
+      {% if job.app_status %}
+        <select name="status">
+          {% for s in ("applied", "interviewing", "offer", "rejected") %}
+            <option value="{{ s }}" {{ 'selected' if s == next_status }}>{{ s | capitalize }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        <input type="hidden" name="status" value="applied">
+      {% endif %}
+      <input type="text" name="note" placeholder="Note (optional), e.g. phone screen 10/12" style="width:260px">
+      <button type="submit">{{ 'Update' if job.app_status else 'Mark as applied' }}</button>
+    </form>
+  </div>
+  {% if events %}
+    <ul class="history small">
+      {% for e in events %}
+        <li><span class="subtle">{{ e.at[:10] }}</span> {{ status_pill(e.status) }}{% if e.note %} {{ e.note }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+    <form method="post" action="{{ url_for('job_status_clear', job_id=job.id) }}" style="margin:0"
+          onsubmit="return confirm('Clear this job\'s whole application history?');">
+      <button class="linkish small" type="submit">Undo / clear history</button>
+    </form>
+  {% endif %}
+</div>
+{% endmacro %}

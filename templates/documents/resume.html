@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ contact.name }} Resume</title>
+<style>
+  /* Mirrors "Resume Kevin Steele.pdf": Cambria, centered header,
+     bold section titles with a full-width rule, round bullets. */
+  @page { size: letter; margin: 0.55in 0.6in; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Cambria, Georgia, serif;
+    font-size: {{ font_size }}pt;
+    line-height: 1.28;
+    color: #000;
+  }
+  header { text-align: center; margin-bottom: 4pt; }
+  h1 { font-size: 20pt; margin: 0 0 2pt; }
+  .contact { font-size: 10.5pt; }
+  h2 {
+    font-size: {{ font_size }}pt;
+    text-transform: uppercase;
+    margin: 9pt 0 4pt;
+    padding-bottom: 2pt;
+    border-bottom: 1px solid #000;
+  }
+  p { margin: 0; }
+  /* Real list bullets (not drawn-on ones), so ATS software reads each
+     bullet before its text. */
+  ul { margin: 0; padding-left: 18pt; list-style: disc; }
+  li { margin-bottom: 2pt; padding-left: 2pt; }
+  li::marker { font-size: 1.15em; }
+  .skills { columns: 2; column-gap: 24pt; }
+  .skills li { break-inside: avoid; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>{{ contact.name }}</h1>
+    <div class="contact">
+      {{ [contact.location, contact.phone, contact.email] | select | join(" • ") }}<br>
+      {{ [contact.portfolio, contact.linkedin, contact.github] | select | join(" • ") }}
+    </div>
+  </header>
+
+  <h2>Summary</h2>
+  <p>{{ draft.resume.summary }}</p>
+
+  {# Education right after the summary: for a recent graduate the degree is
+     the first thing a recruiter looks for. #}
+  <h2>Education</h2>
+  <ul>
+    <li>{{ draft.resume.education }}{% if contact.gpa and 'GPA' not in draft.resume.education %} | GPA: {{ contact.gpa }}{% endif %}</li>
+    {% if draft.resume.coursework %}<li>Relevant Coursework: {{ draft.resume.coursework | join(", ") }}</li>{% endif %}
+  </ul>
+
+  <h2>Projects</h2>
+  <ul>
+    {% for p in draft.resume.projects %}<li>{{ p.name }}: {{ p.description }}</li>{% endfor %}
+  </ul>
+
+  <h2>Experience</h2>
+  <ul>
+    {% for e in draft.resume.experience %}<li>{{ e.heading }}: {{ e.description }}</li>{% endfor %}
+  </ul>
+
+  <h2>Skills</h2>
+  <ul class="skills">
+    {% for s in draft.resume.skills %}<li>{{ s }}</li>{% endfor %}
+  </ul>
+</body>
+</html>

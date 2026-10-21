@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Score</h1>
+<p class="subtle">Claude reads your profile, feedback rules, and each job, and scores it 1–10.
+  <strong>{{ counts.to_score }}</strong> job{{ 's' if counts.to_score != 1 }} waiting.</p>
+
+{% if profile_missing %}
+  <div class="flash error">profile.md is missing. Write it before scoring.</div>
+{% endif %}
+
+<form class="panel row" method="post" action="{{ url_for('score_start') }}" id="start-form">
+  <div>
+    <label for="limit">How many this run</label>
+    <input type="number" id="limit" name="limit" value="50" min="1" style="width:110px">
+  </div>
+  <div>
+    <label for="batch_size">Jobs per call</label>
+    <input type="number" id="batch_size" name="batch_size" value="10" min="1" max="30" style="width:90px">
+  </div>
+  <div>
+    <label for="model">Model</label>
+    <select id="model" name="model">
+      {% for value, label in models %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <button type="submit" id="start-btn" {{ 'disabled' if scoring or profile_missing }}>Start scoring</button>
+  <a class="button secondary" href="{{ url_for('score_preview') }}">Preview prompt</a>
+</form>
+
+<div class="panel">
+  <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:10px">
+    <h2 style="margin:0" id="status-line">No run yet.</h2>
+    <form method="post" action="{{ url_for('score_stop') }}" style="margin:0">
+      <button class="secondary" type="submit" id="stop-btn" hidden>Stop after this batch</button>
+    </form>
+  </div>
+  <div class="log" id="log" hidden></div>
+  <p class="small subtle" id="summary"></p>
+</div>
+
+<script>
+  // Ask the server for the run's progress; repeat every 2s while it's running.
+  async function poll() {
+    const s = await (await fetch("{{ url_for('score_status') }}")).json();
+    const line = document.getElementById("status-line");
+    const log = document.getElementById("log");
+
+    if (s.running) {
+      line.textContent = s.stop
+        ? "Stopping after the current batch…"
+        : (s.total ? `Batch ${s.index} of ${s.total} (${s.current})…` : "Starting…");
+    } else if (s.summary || s.error) {
+      line.textContent = s.error ? "Run failed" : "Run finished";
+    }
+    document.getElementById("stop-btn").hidden = !s.running;
+    document.getElementById("start-btn").disabled = s.running || {{ 'true' if profile_missing else 'false' }};
+
+    log.hidden = s.log.length === 0;
+    log.textContent = s.log.join("\n");
+    log.scrollTop = log.scrollHeight;
+
+    const summary = document.getElementById("summary");
+    if (s.error) {
+      summary.textContent = s.error;
+    } else if (s.summary) {
+      const m = s.summary;
+      summary.innerHTML = `Scored ${m.scored}` + (m.rechecked ? ` (${m.rechecked} re-checks)` : "") +
+        ` · failed ${m.failed} · ${m.remaining} still waiting` +
+        (m.recheck_remaining ? ` · ${m.recheck_remaining} re-checks waiting` : "") +
+        (m.stopped_reason ? ` · stopped: ${m.stopped_reason}` : "") +
+        (m.failed ? " · details in data/score_errors.log" : "") +
+        ` · <a href="{{ url_for('jobs', view='scored') }}">See scored jobs</a>`;
+    }
+    if (s.running) setTimeout(poll, 2000);
+  }
+  poll();
+</script>
+{% endblock %}

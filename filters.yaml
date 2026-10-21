@@ -1,0 +1,198 @@
+# Rule-based pre-filter. Keep it permissive: only remove obvious mismatches.
+# Anything borderline should pass and get a low score from Claude instead.
+#
+# Matching is case-insensitive and whole-word: "data" matches "Data Engineer"
+# but not "Metadata". Word forms are separate words, so "engineer" does NOT
+# match "Engineering Manager". List each form you want.
+#
+# An empty or missing list means "no rule" (everything passes that check).
+# Edits apply automatically before the next scoring run.
+
+title:
+  # Pass only if the title contains at least one of these.
+  include:
+    - engineer
+    - engineering
+    - developer
+    - software
+    - swe
+    - programmer
+    - data
+    - analyst
+    - analytics
+    - scientist
+    - science
+    - research
+    - researcher
+    - machine learning
+    - ml
+    - ai
+    - business intelligence
+    - bi
+    - quantitative
+  # Filtered out if the title contains any of these (checked first).
+  # Seniority words are obvious mismatches for a new grad; "lead" and
+  # "manager" are left out because they're ambiguous.
+  exclude:
+    - senior
+    - sr
+    - staff
+    - principal
+    - director
+    - head of
+    - vice president
+    - vp
+    - engineering manager
+    - sales
+    - account executive
+    - recruiter
+
+location:
+  # Pass only if ANY location contains one of these (empty = allow all).
+  include: []
+  # Filtered out only if EVERY listed location matches one of these, so
+  # "London; New York" passes but "London; Dublin" doesn't.
+  # Blank locations always pass.
+  exclude:
+    # Outside the US
+    - uk
+    - united kingdom
+    - england
+    - london
+    - ireland
+    - dublin
+    - germany
+    - berlin
+    - munich
+    - france
+    - paris
+    - netherlands
+    - amsterdam
+    - spain
+    - madrid
+    - barcelona
+    - portugal
+    - lisbon
+    - italy
+    - milan
+    - belgium
+    - brussels
+    - austria
+    - vienna
+    - czech
+    - prague
+    - romania
+    - bucharest
+    - greece
+    - athens
+    - estonia
+    - finland
+    - helsinki
+    - norway
+    - oslo
+    - switzerland
+    - zurich
+    - sweden
+    - stockholm
+    - denmark
+    - copenhagen
+    - poland
+    - warsaw
+    - israel
+    - tel aviv
+    - india
+    - bangalore
+    - bengaluru
+    - hyderabad
+    - pune
+    - mumbai
+    - noida
+    - gurgaon
+    - gurugram
+    - delhi
+    - chennai
+    - indonesia
+    - jakarta
+    - malaysia
+    - kuala lumpur
+    - thailand
+    - bangkok
+    - uae
+    - dubai
+    - argentina
+    - buenos aires
+    - colombia
+    - bogota
+    - chile
+    - nigeria
+    - lagos
+    - kenya
+    - nairobi
+    - south africa
+    - singapore
+    - japan
+    - tokyo
+    - korea
+    - seoul
+    - china
+    - beijing
+    - shanghai
+    - hong kong
+    - taiwan
+    - australia
+    - sydney
+    - melbourne
+    - canada
+    - toronto
+    - vancouver
+    - montreal
+    - mexico
+    - brazil
+    - philippines
+    - vietnam
+
+# Scoring order. Nothing here removes a job: it only decides which waiting
+# jobs Claude scores first, so the nightly cap goes to the most promising ones.
+# Each job gets points (see filters.py -> priority):
+#   +3  title has an entry_level word
+#   +1  title has a target_role phrase
+#   +1  found through a new-grad source (the Simplify list or the sweep)
+#   -2  title has a higher_level word
+#   -3  the description asks for 3+ years of experience (a simple pattern, so
+#       it can't tell "required" from "preferred": that's why it only lowers
+#       priority; Claude's hard-gate check decides properly when scored)
+priority:
+  entry_level:
+    - new grad
+    - new grads
+    - new graduate
+    - graduate
+    - entry level
+    - entry-level
+    - junior
+    - jr
+    - early career
+    - university
+    - campus
+    - associate
+    - apprentice
+    - rotational
+    - i
+    - "1"
+  target_roles:
+    - software engineer
+    - software developer
+    - data analyst
+    - data scientist
+    - analytics engineer
+    - business intelligence
+    - machine learning engineer
+  higher_level:
+    - ii
+    - iii
+    - iv
+    - "2"
+    - "3"
+    - lead
+    - manager
+    - architect

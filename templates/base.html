@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Job Sourcer{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% set ep = request.endpoint %}
+  <nav>
+    <span class="brand">Job Sourcer</span>
+    <a class="tab {{ 'active' if ep in ('jobs', 'job_detail') }}" href="{{ url_for('jobs') }}">Jobs</a>
+    <a class="tab {{ 'active' if ep == 'rate_queue' }}" href="{{ url_for('rate_queue') }}">Rate</a>
+    <a class="tab {{ 'active' if ep == 'fetch_page' }}" href="{{ url_for('fetch_page') }}">Fetch{% if importing %}<span class="live">● importing</span>{% endif %}</a>
+    <a class="tab {{ 'active' if ep in ('score_page', 'score_preview') }}" href="{{ url_for('score_page') }}">
+      Score<span class="badge">{{ counts.to_score }}</span>{% if scoring %}<span class="live">● running</span>{% endif %}
+    </a>
+    <a class="tab {{ 'active' if ep == 'feedback_page' or ep == 'feedback_propose' }}" href="{{ url_for('feedback_page') }}">Feedback</a>
+    <a class="tab {{ 'active' if ep in ('applications', 'application_page') }}" href="{{ url_for('applications') }}">Applications</a>
+  </nav>
+  <main>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

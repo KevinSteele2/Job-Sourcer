@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_macros.html" import score_badge, status_pill, age_badge %}
+{% block content %}
+<h1>Jobs</h1>
+<p class="subtle">Click a job to see the full description, Claude's reasoning, and rate it.</p>
+
+<div class="tabs">
+  {% for key, label in views.items() %}
+    <a class="{{ 'active' if key == view }}"
+       href="{{ url_for('jobs', view=key, company=company, q=search, sort=sort) }}">{{ label }} · {{ counts[key] }}</a>
+  {% endfor %}
+</div>
+
+<form class="row panel" method="get">
+  <input type="hidden" name="view" value="{{ view }}">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <div>
+    <label for="company">Company</label>
+    <select id="company" name="company" onchange="this.form.submit()">
+      <option value="">All companies</option>
+      {% for c in companies %}<option value="{{ c }}" {{ 'selected' if c == company }}>{{ c }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="grow">
+    <label for="q">Title contains</label>
+    <input type="text" id="q" name="q" value="{{ search }}" placeholder="e.g. data, engineer" style="width:100%">
+  </div>
+  <button type="submit">Search</button>
+  {% if view != 'applied' %}
+  <div class="small" style="align-self:flex-end; padding-bottom:6px">
+    Sort:
+    {% for key, label in (('score', 'Best score' if view != 'to_score' else 'Scoring order'), ('newest', 'Newest first')) %}
+      {% if sort == key %}<strong>{{ label }}</strong>{% else %}<a href="{{ url_for('jobs', view=view, company=company, q=search, sort=key) }}">{{ label }}</a>{% endif %}{{ ' · ' if not loop.last }}
+    {% endfor %}
+  </div>
+  {% endif %}
+</form>
+
+<div class="panel" style="padding:4px 10px">
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th class="num">Score</th><th class="num">Mine</th><th>Title</th><th>Company</th><th>Location</th>
+        <th title="How long ago it was posted">Posted</th>
+        {% if view in ('filtered_out', 'closed', 'targets') %}<th>Why</th>
+        {% elif view == 'to_score' %}<th title="Scoring order: higher is scored first">Priority</th>
+        {% elif view == 'applied' %}<th>Status</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="num">{{ score_badge(r.score) }}</td>
+        <td class="num">{{ r.my_rating if r.my_rating is not none else '' }}</td>
+        <td>{% if r.target %}<span title="Target company{{ ': ' ~ target_companies[r.company.lower()].connection if target_companies.get(r.company.lower()) and target_companies[r.company.lower()].connection }}">★</span> {% endif %}<a href="{{ url_for('job_detail', job_id=r.id) }}">{{ r.title }}</a>
+          {% if r.app_status and view != 'applied' %} {{ status_pill(r.app_status) }}{% endif %}</td>
+        <td>{{ r.company }}</td>
+        <td class="loc">{{ r.location }}{% if r.copies %} <span class="subtle small">+{{ r.copies }} more</span>{% endif %}</td>
+        <td>{{ age_badge(r.posted_at, r.first_seen) }}</td>
+        {% if view in ('filtered_out', 'closed', 'targets') %}
+          <td class="small subtle">{{ r.filter_reason or r.status.replace('_', ' ') }}</td>
+        {% elif view == 'to_score' %}
+          <td class="num">{{ r.priority if r.priority is not none else '' }}</td>
+        {% elif view == 'applied' %}
+          <td class="small">{{ status_pill(r.app_status) }} <span class="subtle">{{ r.applied_at[:10] }}</span></td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="subtle" style="padding:12px">
+      No jobs here.
+      {% if view == 'scored' %}Score some on the <a href="{{ url_for('score_page') }}">Score</a> page.{% endif %}
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

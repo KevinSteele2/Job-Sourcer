@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Feedback</h1>
+<p class="subtle">The rules in feedback.md are added to every scoring prompt. Claude can propose rules
+  from the jobs where your rating and its score disagree.</p>
+
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <div class="stats">
+      <div><strong>{{ stats.total }}</strong><span class="subtle small">ratings</span></div>
+      <div><strong>{{ stats.usable }}</strong><span class="subtle small">disagree by {{ threshold }}+ with a comment</span></div>
+      <div><strong>{{ stats.no_comment }}</strong><span class="subtle small">disagree, no comment (skipped)</span></div>
+    </div>
+    <a class="button secondary" href="{{ url_for('ratings_csv') }}">Export ratings CSV</a>
+  </div>
+
+  <form class="row" method="post" action="{{ url_for('feedback_propose') }}" style="margin-top:16px"
+        onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Asking Claude…';">
+    <div>
+      <label for="threshold">Minimum disagreement</label>
+      <input type="number" id="threshold" name="threshold" value="{{ threshold }}" min="1" max="9" style="width:90px">
+    </div>
+    <div>
+      <label for="model">Model</label>
+      <select id="model" name="model">
+        {% for value, label in models %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <button type="submit" {{ 'disabled' if not stats.usable }}>Propose rules</button>
+  </form>
+</div>
+
+<div class="grid2">
+  <form class="panel" method="post" action="{{ url_for('feedback_save') }}">
+    <h2>Current rules (feedback.md)</h2>
+    <textarea class="mono" name="text" rows="16" placeholder="No rules yet. One rule per line, starting with “- ”.">{{ current }}</textarea>
+    <div style="margin-top:10px"><button type="submit" class="secondary">Save changes</button></div>
+  </form>
+
+  {% if proposal %}
+  <form class="panel" method="post" action="{{ url_for('feedback_save') }}">
+    <h2>Proposed rules</h2>
+    <p class="small subtle">From {{ proposal.used }} rating{{ 's' if proposal.used != 1 }} ({{ proposal.model }}).
+      This is a complete, merged list. Delete any rule you disagree with, edit the rest, then save it
+      to <strong>replace</strong> feedback.md.</p>
+    <textarea class="mono" name="text" rows="13">{{ proposal.rules | join('\n') }}</textarea>
+    <div style="margin-top:10px"><button type="submit">Replace feedback.md with these</button></div>
+  </form>
+  {% else %}
+  <div class="panel">
+    <h2>Proposed rules</h2>
+    <p class="subtle">Click “Propose rules” to have Claude turn your disagreements into rules.
+      Nothing changes until you save.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

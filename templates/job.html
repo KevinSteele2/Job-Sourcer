@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% from "_macros.html" import score_badge, tracker, age_badge %}
+{% block title %}{{ job.title }} · Job Sourcer{% endblock %}
+{% block content %}
+
+{% if queue %}
+  <p class="subtle">Rating queue · {{ queue.remaining }} unrated job{{ 's' if queue.remaining != 1 }} left
+    {% if queue.n % 4 == 3 %}· <em>low-scored pick, to catch jobs Claude under-rated</em>{% endif %}</p>
+{% endif %}
+
+<div class="panel">
+  <div class="job-head">
+    <div>
+      <h1>{{ job.title }}</h1>
+      <div class="subtle">{{ job.company }} · {{ job.location or 'Location not listed' }}</div>
+      {% set tc = target_companies.get(job.company.lower()) %}
+      {% if job.target and tc %}
+        <div class="small" style="margin-top:4px">★ Target company{% if tc.connection %} · your connection: {{ tc.connection }}{% endif %}</div>
+      {% endif %}
+      <div class="small subtle" style="margin-top:4px">
+        {% if job.closed_at %}Closed {{ job.closed_at[:10] }} · {% endif %}
+        Status: {{ job.status.replace('_', ' ') }}{% if job.filter_reason %} ({{ job.filter_reason }}){% endif %}
+        · {% if job.posted_at %}posted {{ job.posted_at | local_date }}{% else %}first seen {{ job.first_seen[:10] }}{% endif %}
+        {{ age_badge(job.posted_at, job.first_seen) }}
+      </div>
+      {% if job.duplicate_of %}
+        <div class="small subtle">The same posting is also listed elsewhere; it's scored once, as
+          <a href="{{ url_for('job_detail', job_id=job.duplicate_of) }}">this copy</a>.</div>
+      {% endif %}
+      {% if copies %}
+        <details class="small subtle" style="margin-top:4px">
+          <summary>Also posted in {{ copies | length }} more location{{ 's' if copies | length != 1 }} (same posting, scored once)</summary>
+          {% for c in copies %}<a href="{{ c.url }}" target="_blank" rel="noopener">{{ c.location or 'no location' }}</a>{{ ' · ' if not loop.last }}{% endfor %}
+        </details>
+      {% endif %}
+    </div>
+    <a class="button secondary" href="{{ job.url }}" target="_blank" rel="noopener">Open posting ↗</a>
+  </div>
+</div>
+
+{{ tracker(job, events) }}
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Claude's score</h2>
+    {% if job.score is not none %}
+      <div class="row" style="align-items:center; margin-bottom:10px">
+        {{ score_badge(job.score, big=true) }}
+        <span class="small subtle">{{ job.model }} · prompt {{ job.prompt_version }}</span>
+      </div>
+      {% set gates = job.hard_gates | fromjson %}
+      {% if gates %}
+        <div class="gates">
+          {% if job.fit_score is not none and job.fit_score != job.score %}
+            <strong>Capped from {{ job.fit_score }} to {{ job.score }} by a hard requirement:</strong>
+          {% else %}
+            <strong>Hard requirements found:</strong>
+          {% endif %}
+          <ul>
+            {% for g in gates %}
+              <li class="{{ '' if g.verified else 'subtle' }}">
+                {{ g.gate.replace('_', ' ') }}: “{{ g.quote }}”
+                {% if not g.verified %}<em>(quote not found in the posting, so not applied)</em>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+      <p>{{ job.reason }}</p>
+      <label>Matched skills</label>
+      <div class="chips" style="margin-bottom:12px">
+        {% for s in job.matched_skills | fromjson %}<span class="chip">{{ s }}</span>{% else %}<span class="subtle">None</span>{% endfor %}
+      </div>
+      <label>Gaps</label>
+      <div class="chips">
+        {% for s in job.gaps | fromjson %}<span class="chip">{{ s }}</span>{% else %}<span class="subtle">None</span>{% endfor %}
+      </div>
+    {% elif not job.description %}
+      <p class="subtle">Listing only: this posting is on a job board we can't read descriptions
+        from yet (Workday, iCIMS, ...), so it can't be scored. Use “Open posting” to read it.</p>
+    {% else %}
+      <p class="subtle">Not scored yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>Your rating</h2>
+    {% if job.score is none %}
+      <p class="subtle">Rate jobs after Claude scores them. Your rating is compared with Claude's score.</p>
+    {% else %}
+    <form method="post" action="{{ url_for('rate_job', job_id=job.id) }}">
+      <div class="rating">
+        {% for i in range(1, 11) %}
+          <input type="radio" name="rating" id="r{{ i }}" value="{{ i }}" {{ 'checked' if job.my_rating == i }} required>
+          <label for="r{{ i }}">{{ i }}</label>
+        {% endfor %}
+      </div>
+      <label for="comment">Why? This matters most when you disagree with Claude by 2 or more.</label>
+      <textarea id="comment" name="comment" rows="4"
+        placeholder="e.g. 2 years is only preferred here, and I have React projects">{{ job.comment or '' }}</textarea>
+      {% if queue %}
+        <input type="hidden" name="queue_n" value="{{ queue.n }}">
+        <input type="hidden" name="queue_skip" value="{{ queue.skip }}">
+      {% endif %}
+      <div class="row" style="margin-top:12px">
+        <button type="submit">{{ 'Save & next' if queue else 'Save rating' }}</button>
+        {% if queue %}<a class="button secondary" href="{{ queue.skip_url }}">Skip</a>{% endif %}
+      </div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if job.description %}
+<div class="panel row" style="justify-content:space-between; align-items:center">
+  <div>
+    <h2 style="margin-bottom:4px">Application</h2>
+    <div class="small subtle">A tailored one-page resume and cover letter from full-profile.md,
+      truth-checked, for you to edit before making the PDFs. Takes a few minutes (Opus).</div>
+  </div>
+  {% if has_application %}
+    <a class="button" href="{{ url_for('application_page', job_id=job.id) }}">Open draft</a>
+  {% else %}
+    <form method="post" action="{{ url_for('draft_start', job_id=job.id) }}" style="margin:0; min-width:340px">
+      <label for="notes">Why this company? <span class="subtle">(optional, your own words: what draws you to it,
+      any personal connection. The letter's personal part is built from this and nothing is added to it.)</span></label>
+    <textarea id="notes" name="notes" rows="3" style="margin-bottom:8px" placeholder="e.g. My family had a rough time with insurance when..."></textarea>
+      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1">
+        Resume only, no cover letter <span class="subtle">(for applications that don't take one; faster,
+        since it skips the company research and the letter)</span></label>
+      <button type="submit">Draft</button>
+    </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Description</h2>
+  {% if job.description %}
+    <div class="description">{{ job.description }}</div>
+  {% else %}
+    <p class="subtle">No description stored. <a href="{{ job.url }}" target="_blank" rel="noopener">Open the posting ↗</a></p>
+  {% endif %}
+</div>
+{% endblock %}

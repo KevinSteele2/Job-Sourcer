@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Prompt preview</h1>
+<p class="subtle">Exactly what Claude receives for the next job to score. Nothing is sent.
+  <a href="{{ url_for('score_page') }}">Back to Score</a></p>
+<div class="panel">
+  {% if prompt %}
+    <pre class="prompt" style="max-height:none">{{ prompt }}</pre>
+  {% else %}
+    <p class="subtle">No jobs are waiting to be scored.</p>
+  {% endif %}
+</div>
+{% endblock %}

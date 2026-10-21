@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Fetch</h1>
+<p class="subtle">Bring in jobs from a multi-company job list, or from one company's board.
+  Either way, postings that come down are marked closed and the keyword filter runs.</p>
+
+<p class="small {{ 'subtle' if not nightly or nightly.status == 'ok' else '' }}"
+   style="{{ 'color: var(--error-text)' if nightly and nightly.status != 'ok' else '' }}">
+  {% if nightly %}
+    Last nightly run: {{ nightly.started[:16].replace('T', ' ') }} UTC, {{ nightly.minutes }} min, {{ nightly.status }}
+    {% if nightly.score %}· scored {{ nightly.score.scored }}{% endif %}
+    {% if nightly.sweep %}· sweep found {{ nightly.sweep.added }}{% endif %}
+    · details in data/logs/
+  {% else %}
+    No nightly run yet (see README → Nightly runs).
+  {% endif %}
+</p>
+
+{% if usage %}
+<details class="panel">
+  <summary><strong>Claude usage, last 7 days</strong>
+    <span class="small subtle">· {{ usage | sum(attribute='calls') }} calls ·
+      ${{ '%.2f' | format(usage | sum(attribute='cost_usd')) }} in API-equivalent cost</span></summary>
+  <p class="small subtle">On a Claude plan this isn't billed; it's a measure of how much of your plan each step uses.</p>
+  <table>
+    <thead><tr><th>Step</th><th class="num">Calls</th><th class="num">Input tokens</th><th class="num">Output tokens</th><th class="num">Cost</th><th class="num">Time</th></tr></thead>
+    <tbody>
+      {% for u in usage %}
+      <tr><td>{{ u.stage.replace('_', ' ') }}</td><td class="num">{{ u.calls }}</td>
+        <td class="num">{{ '{:,}'.format(u.input_tokens or 0) }}</td><td class="num">{{ '{:,}'.format(u.output_tokens or 0) }}</td>
+        <td class="num">${{ '%.2f' | format(u.cost_usd or 0) }}</td><td class="num">{{ ((u.seconds or 0) / 60) | round(1) }} min</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</details>
+{% endif %}
+
+<div class="panel">
+  <div class="row" style="justify-content:space-between; align-items:flex-start">
+    <div>
+      <h2 style="margin-bottom:4px">SimplifyJobs New Grad list</h2>
+      <div class="small subtle">
+        Categories: {{ feed_categories | join(', ') }} (change in feeds.yaml)<br>
+        {% if feed.last_import %}
+          {{ feed.open }} open jobs from this list · last import {{ feed.last_import[:16].replace('T', ' ') }} UTC
+        {% else %}
+          Not imported yet. The first import takes about 5 minutes; later ones take seconds.
+        {% endif %}
+      </div>
+    </div>
+    <div class="row">
+      <form method="post" action="{{ url_for('import_start') }}" style="margin:0">
+        <button type="submit" id="import-btn" {{ 'disabled' if importing }}>Import</button>
+      </form>
+      <form method="post" action="{{ url_for('import_stop') }}" style="margin:0">
+        <button class="secondary" type="submit" id="import-stop" hidden>Stop</button>
+      </form>
+    </div>
+  </div>
+  <p id="import-line" class="small" style="margin:12px 0 0" hidden></p>
+  <div id="import-summary" hidden style="margin-top:12px"></div>
+  <p class="small subtle" style="margin:12px 0 0">Jobs on Greenhouse, Lever, or Ashby get full descriptions and can be scored.
+    Others (Workday, iCIMS, ...) are kept under <a href="{{ url_for('jobs', view='no_description') }}">Listing only</a>
+    with a link to the posting.</p>
+</div>
+
+<div class="panel">
+  <div class="row" style="justify-content:space-between; align-items:flex-start">
+    <div>
+      <h2 style="margin-bottom:4px">Wide sweep</h2>
+      <div class="small subtle">
+        Checks ~15,900 public Greenhouse, Lever and Ashby boards for new postings whose title matches
+        your sweep keywords (feeds.yaml → sweep). About 10–20 minutes.<br>
+        {% if sweep.last_sweep %}
+          {{ sweep.open }} open jobs found by the sweep · last sweep {{ sweep.last_sweep[:16].replace('T', ' ') }} UTC
+        {% else %}
+          Not run yet.
+        {% endif %}
+      </div>
+    </div>
+    <div class="row">
+      <form method="post" action="{{ url_for('sweep_start') }}" style="margin:0">
+        <button type="submit" id="sweep-btn" {{ 'disabled' if sweeping }}>Sweep</button>
+      </form>
+      <form method="post" action="{{ url_for('sweep_stop') }}" style="margin:0">
+        <button class="secondary" type="submit" id="sweep-stop" hidden>Stop</button>
+      </form>
+    </div>
+  </div>
+  <p id="sweep-line" class="small" style="margin:12px 0 0" hidden></p>
+  <div id="sweep-summary" hidden style="margin-top:12px"></div>
+</div>
+
+<form class="panel" method="post" action="{{ url_for('targets_check') }}"
+      onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Checking…';">
+  <div class="row" style="justify-content:space-between; align-items:center">
+    <div>
+      <h2 style="margin-bottom:4px">★ Target companies</h2>
+      <div class="small subtle">Every open posting at the companies in companies.yaml, checked each night.
+        Takes a minute or two (Meta's pages load in a browser).</div>
+    </div>
+    <button type="submit" class="secondary">Check now</button>
+  </div>
+  {% if targets %}
+  <table style="margin-top:8px">
+    <thead><tr><th>Company</th><th>Read from</th><th class="num">Open</th><th class="num">Passed filter</th><th class="num">Scored 7+</th><th>Connection</th></tr></thead>
+    <tbody>
+      {% for t in targets %}{% set r = target_rows.get(t.key.lower()) or target_rows.get(t.name.lower()) %}
+      <tr>
+        <td><a href="{{ url_for('jobs', view='targets', company=r.company if r else t.key) }}">{{ t.name }}</a>
+          {% if t.careers_url %}<a class="small subtle" href="{{ t.careers_url }}" target="_blank" rel="noopener">careers ↗</a>{% endif %}</td>
+        <td class="small subtle">{{ t.source }}</td>
+        <td class="num">{{ r.open if r else 0 }}</td><td class="num">{{ r.passed if r else 0 }}</td>
+        <td class="num">{{ r.good if r else 0 }}</td>
+        <td class="small">{{ t.connection }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</form>
+
+<form class="panel row" method="post" action="{{ url_for('liveness_check') }}"
+      style="justify-content:space-between; align-items:center"
+      onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Checking…';">
+  <div>
+    <h2 style="margin-bottom:4px">Still open?</h2>
+    <div class="small subtle">Re-checks up to 40 open jobs scored or rated 7+ with their ATS, least recently
+      checked first, and closes any that were taken down. Takes under a minute.</div>
+  </div>
+  <button type="submit" class="secondary">Check top jobs</button>
+</form>
+
+{% if summary %}
+<div class="panel">
+  <h2>{{ summary.board }}</h2>
+  <div class="stats" style="margin-bottom:12px">
+    <div><strong>{{ summary.fetched }}</strong><span class="subtle small">fetched</span></div>
+    <div><strong>{{ summary.new }}</strong><span class="subtle small">new</span></div>
+    <div><strong>{{ summary.closed }}</strong><span class="subtle small">closed</span></div>
+    <div><strong>{{ summary.filtered_out }}</strong><span class="subtle small">filtered out</span></div>
+    <div><strong>{{ summary.passed }}</strong><span class="subtle small">passed</span></div>
+  </div>
+  {% if summary.reasons %}
+    <table>
+      <thead><tr><th>Filtered out because</th><th class="num">Jobs</th></tr></thead>
+      <tbody>
+        {% for reason, n in summary.reasons %}<tr><td>{{ reason }}</td><td class="num">{{ n }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  <p class="small subtle" style="margin-top:12px">“Passed” counts this board's unscored jobs; already-scored jobs aren't re-filtered.</p>
+</div>
+{% endif %}
+
+<form class="panel row" method="post">
+  <div>
+    <label for="ats">ATS</label>
+    <select id="ats" name="ats">
+      {% for a in ats_names %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="grow">
+    <label for="slug">Company slug (from the board URL, e.g. jobs.lever.co/<b>palantir</b>)</label>
+    <input type="text" id="slug" name="slug" placeholder="e.g. stripe" style="width:100%" required>
+  </div>
+  <button type="submit">Fetch</button>
+</form>
+
+<div class="panel" style="padding:4px 10px">
+  {% if boards %}
+  <table>
+    <thead><tr><th>Board</th><th class="num">Open</th><th class="num">Total</th><th>Last fetched</th><th></th></tr></thead>
+    <tbody>
+      {% for b in boards %}
+      <tr>
+        <td><strong>{{ b.company }}</strong> <span class="subtle small">{{ b.source }}</span></td>
+        <td class="num">{{ b.open }}</td>
+        <td class="num">{{ b.total }}</td>
+        <td class="small subtle">{{ b.last_fetched[:16].replace('T', ' ') }} UTC</td>
+        <td style="text-align:right">
+          <form method="post" style="margin:0">
+            <input type="hidden" name="ats" value="{{ b.source }}">
+            <input type="hidden" name="slug" value="{{ b.company }}">
+            <button class="secondary" type="submit">Refresh</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="subtle" style="padding:12px">No boards fetched yet.</p>
+  {% endif %}
+</div>
+
+<script>
+  // Same polling idea as the Score page: ask a task for progress every 2s
+  // while it runs. One function drives both the import and the sweep panels.
+  async function pollTask(name, statusUrl, runningText, summaryHtml) {
+    const s = await (await fetch(statusUrl)).json();
+    const line = document.getElementById(name + "-line");
+    const box = document.getElementById(name + "-summary");
+    document.getElementById(name + "-btn").disabled = s.running;
+    document.getElementById(name + "-stop").hidden = !s.running;
+
+    if (s.running) {
+      line.hidden = false;
+      line.textContent = s.stop ? "Stopping…" : runningText(s);
+    } else if (s.error) {
+      line.hidden = false;
+      line.textContent = "Failed: " + s.error;
+    } else if (s.summary) {
+      line.hidden = true;
+      box.hidden = false;
+      box.innerHTML = summaryHtml(s.summary);
+    }
+    if (s.running) setTimeout(() => pollTask(name, statusUrl, runningText, summaryHtml), 2000);
+  }
+
+  const stat = (n, label) => `<div><strong>${n}</strong><span class="subtle small">${label}</span></div>`;
+
+  pollTask("import", "{{ url_for('import_status') }}",
+    s => s.total ? `Fetching new job ${s.index} of ${s.total}: ${s.current}` : "Downloading the list…",
+    m => `
+      <div class="stats" style="flex-wrap:wrap; margin-bottom:10px">
+        ${stat(m.listings, "active listings")}${stat(m.added, "new, with description")}
+        ${stat(m.listing_only_added, "new, listing only")}${stat(m.closed, "closed")}
+        ${stat(m.filtered_out, "filtered out")}${stat(m.status_counts.to_score || 0, "ready to score")}
+      </div>
+      <div class="small subtle">
+        ${m.reasons.map(([r, n]) => `${n} × ${r}`).join(" · ")}
+        ${m.unavailable ? ` · ${m.unavailable} already taken down` : ""}
+        ${m.failed ? ` · ${m.failed} failed (retried next import)` : ""}
+        ${m.stopped ? ` · stopped early, ${m.not_fetched} left for next import` : ""}
+      </div>`);
+
+  pollTask("sweep", "{{ url_for('sweep_status') }}",
+    s => s.total ? `Checked ${s.index} of ${s.total} boards…` : "Starting…",
+    m => `
+      <div class="stats" style="flex-wrap:wrap">
+        ${stat(m.checked, "boards checked")}${stat(m.added, "new jobs")}${stat(m.closed, "closed")}
+        ${stat(m.newly_dead + m.skipped_dead, "boards gone (skipped)")}${stat(m.failed, "failed")}
+      </div>
+      ${m.stopped ? '<p class="small subtle">Stopped early.</p>' : ""}`);
+</script>
+{% endblock %}

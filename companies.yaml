@@ -1,0 +1,52 @@
+# Target companies: places you especially want to work, e.g. where you know
+# someone. Checked every night (and from the Fetch page) by targets.py.
+#
+# Unlike the wide sweep, every open posting is pulled, whatever its title or
+# date, so a role with an unexpected title still shows up. filters.yaml still
+# applies (no senior or sales roles); the ones it removes are on the Jobs
+# page's "Filtered out" tab (pick the company) with the reason. Target jobs
+# are scored before anything else, get a ★ badge, and have their own tab.
+#
+# Each company:
+#   name:        how it's shown
+#   connection:  who you know there (optional; shown on its jobs, just for you)
+#   source:      how its jobs are read:
+#                  greenhouse / lever / ashby  -> set board: (the slug in its board URL)
+#                  laserfiche                  -> jobs.laserfiche.com (read from the page)
+#                  oracle                      -> an Oracle career site: set host: and site:
+#                  meta                        -> metacareers.com through headless Edge;
+#                                                 set searches: (it only runs these)
+#   careers_url: the careers page (optional; linked from the Fetch page)
+#
+# Adding a company: tell Claude its name, and it will find which system its
+# jobs are on and add it here.
+
+companies:
+  - name: Codazen
+    connection: ""
+    source: greenhouse
+    board: codazen
+    careers_url: https://job-boards.greenhouse.io/codazen
+
+  - name: Laserfiche
+    connection: ""
+    source: laserfiche
+    careers_url: https://www.laserfiche.com/careers/
+
+  - name: LCS
+    connection: ""
+    source: oracle
+    host: eexs.fa.us2.oraclecloud.com
+    site: LCS
+    careers_url: https://www.lcsliving.com/about-us/careers/
+
+  - name: Meta
+    connection: ""
+    source: meta
+    searches:
+      - university grad
+      - new grad
+      - early career
+      - data scientist
+      - data analyst
+    careers_url: https://www.metacareers.com/jobsearch

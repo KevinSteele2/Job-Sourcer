@@ -1,0 +1,45 @@
+# Job lists that cover many companies at once (Fetch page -> "Import", or
+# python import_feed.py).
+
+simplify:
+  # Categories to import from SimplifyJobs' New-Grad list.
+  # Main ones: Software, AI/ML/Data, Quant, Product, Hardware.
+  # Simplify also uses a few alternate names, listed here so nothing is missed.
+  categories:
+    - Software
+    - Software Engineering
+    - AI/ML/Data
+    - Data Science, AI & Machine Learning
+
+sweep:
+  # The wide sweep checks every public Greenhouse, Lever and Ashby board in
+  # boards/*.json (~15,900 companies, from the Job Search Kit's slug cache).
+  # A posting is kept when it's new, was posted within lookback_days, its
+  # title contains one of title_keywords, and it passes filters.yaml.
+  # Keep these keywords targeted: the sweep sees every job at every company.
+  title_keywords:
+    - new grad
+    - new graduate
+    - graduate
+    - entry level
+    - entry-level
+    - junior
+    - early career
+    - university
+    - associate software engineer
+    - software engineer i
+    - software engineer 1
+    - software developer
+    - data analyst
+    - data scientist
+    - analytics engineer
+    - business intelligence
+    - machine learning engineer
+    # Internships: worth it when they don't require being a student. Ones that
+    # do (currently enrolled, Class of 2027...) get the enrollment hard gate
+    # in scoring, which caps them at 2, so they sink to the bottom.
+    - intern
+    - internship
+  lookback_days: 7
+  # Boards checked at the same time. Higher is faster but less polite.
+  workers: 8
