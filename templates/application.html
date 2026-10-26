@@ -11,15 +11,36 @@
 
 {{ tracker(job, events) }}
 
+{% if versions %}
+<details class="panel">
+  <summary><strong>Versions</strong>
+    <span class="small subtle">{{ versions | length }} saved{% for v in versions if v.kind == 'sent' %} · sent {{ v.at | local_date }}{% endfor %}
+    {% if edits is not none %} · {{ edits_changed }} lines changed by hand{% endif %}</span></summary>
+  <ul class="history small">
+    {% for v in versions %}
+      <li><span class="subtle">{{ v.at | local_date }}</span> {{ v.kind }}{% if v.files %} · copies in "{{ v.files.split('\\')[-1] }}"{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% if edits %}
+    <div class="small subtle">What you changed from the generated draft (− removed, + added):</div>
+    <pre class="small" style="white-space:pre-wrap">{% for l in edits %}{{ l }}
+{% endfor %}</pre>
+  {% endif %}
+</details>
+{% endif %}
+
 {% if rendered %}
 <div class="panel row" style="justify-content:space-between; align-items:center">
   <div>
-    <h2 style="margin-bottom:4px">Final PDFs</h2>
-    <div class="small subtle">Generated {{ app.rendered_at[:16].replace('T', ' ') }} UTC. Edit below and generate again any time.</div>
+    <h2 style="margin-bottom:4px">Final files</h2>
+    <div class="small subtle">Generated {{ app.rendered_at[:16].replace('T', ' ') }} UTC. Edit below and generate again any time.
+      Upload whichever the site asks for: the Word and PDF versions have the same text.</div>
   </div>
   <div class="row">
     {% if rendered.resume %}<a class="button" href="{{ url_for('application_file', job_id=job.id, kind='resume') }}" target="_blank">Resume PDF</a>{% endif %}
+    {% if rendered.resume_docx %}<a class="button secondary" href="{{ url_for('application_file', job_id=job.id, kind='resume', format='docx') }}">Resume Word</a>{% endif %}
     {% if rendered.cover %}<a class="button" href="{{ url_for('application_file', job_id=job.id, kind='cover') }}" target="_blank">Cover letter PDF</a>{% endif %}
+    {% if rendered.cover_docx %}<a class="button secondary" href="{{ url_for('application_file', job_id=job.id, kind='cover', format='docx') }}">Cover letter Word</a>{% endif %}
     <form method="post" action="{{ url_for('application_open_folder', job_id=job.id) }}" style="margin:0">
       <button class="secondary" type="submit">Open folder</button>
     </form>
@@ -120,27 +141,32 @@
     <label for="summary">Summary</label>
     <textarea id="summary" name="summary" rows="3">{{ draft.resume.summary }}</textarea>
 
-    <label style="margin-top:12px">Projects <span class="subtle">(clear both boxes to remove one)</span></label>
+    <label style="margin-top:12px">Projects <span class="subtle">(name, tools, then one bullet per line; clear the name to remove one)</span></label>
     {% for p in draft.resume.projects %}
       <div class="item">
-        <input type="text" name="project_name_{{ loop.index0 }}" value="{{ p.name }}">
-        <textarea name="project_description_{{ loop.index0 }}" rows="2">{{ p.description }}</textarea>
+        <div class="row" style="gap:6px">
+          <input type="text" name="project_name_{{ loop.index0 }}" value="{{ p.name }}" style="flex:1">
+          <input type="text" name="project_tech_{{ loop.index0 }}" value="{{ p.tech }}" placeholder="tools, e.g. Python, SQLite" style="flex:1">
+        </div>
+        <textarea name="project_bullets_{{ loop.index0 }}" rows="{{ [p.bullets | length + 1, 2] | max }}">{{ p.bullets | join('\n') }}</textarea>
         {% if p.source %}<div class="small subtle">from: {{ p.source }}</div>{% endif %}
       </div>
     {% endfor %}
 
-    <label style="margin-top:12px">Experience</label>
+    <label style="margin-top:12px">Experience <span class="subtle">(headings come from your profile's Canonical headings; one bullet per line)</span></label>
     {% for e in draft.resume.experience %}
       <div class="item">
         <input type="text" name="exp_heading_{{ loop.index0 }}" value="{{ e.heading }}">
-        <textarea name="exp_description_{{ loop.index0 }}" rows="2">{{ e.description }}</textarea>
+        <textarea name="exp_bullets_{{ loop.index0 }}" rows="{{ [e.bullets | length + 1, 2] | max }}">{{ e.bullets | join('\n') }}</textarea>
       </div>
     {% endfor %}
+    <div class="small subtle">Retail and lifeguarding are printed on one "Additional experience" line from your profile.</div>
 
     <div class="grid2" style="margin-top:12px">
       <div>
-        <label for="skills">Skills <span class="subtle">(one per line)</span></label>
-        <textarea id="skills" name="skills" rows="8">{{ draft.resume.skills | join('\n') }}</textarea>
+        <label for="skills">Skills <span class="subtle">(one line per group: "Label: item, item")</span></label>
+        <textarea id="skills" name="skills" rows="6">{% for s in draft.resume.skills %}{{ s.label }}: {{ s["items"] | join(', ') }}
+{% endfor %}</textarea>
       </div>
       <div>
         <label for="education">Education</label>
@@ -172,14 +198,14 @@
   {% endif %}
 
   <div class="panel row" style="justify-content:space-between; align-items:center">
-    <div class="small subtle">Saved drafts are kept; generating writes PDFs to applications/{{ draft.company_name }} - {{ draft.role_title }}/</div>
+    <div class="small subtle">Saved drafts are kept; generating writes the PDF and Word files to applications/{{ draft.company_name }} - {{ draft.role_title }}/</div>
     <div class="row">
       <button class="secondary" type="submit" name="action" value="save">Save edits</button>
       {% if draft.cover_letter %}
       <button class="secondary" type="submit" name="action" value="feedback"
               title="Saves your edits, then has Claude review the cover letter (about a minute)">Get feedback on the letter</button>
       {% endif %}
-      <button type="submit" name="action" value="render">Save & generate PDFs</button>
+      <button type="submit" name="action" value="render">Save & generate files</button>
     </div>
   </div>
 </form>
@@ -235,7 +261,10 @@
   <textarea id="notes" name="notes" rows="4" placeholder="What draws you to this company? Any personal connection to what they do?">{{ draft.candidate_notes or '' }}</textarea>
   <div style="margin-top:8px"><label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1"{{ ' checked' if draft.resume_only }}>
         Resume only, no cover letter <span class="subtle">(for applications that don't take one; faster,
-        since it skips the company research and the letter)</span></label></div>
+        since it skips the company research and the letter)</span></label>
+      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="check_gaps" value="1">
+        Ask me about skill gaps first <span class="subtle">(skills the posting wants that your profile
+        doesn't show; "yes" answers are added to full-profile.md)</span></label></div>
   <div class="row" style="margin-top:10px">
     <select name="model"><option value="opus" selected>Opus</option><option value="sonnet">Sonnet</option></select>
     <button class="secondary" type="submit">Redraft</button>
@@ -247,7 +276,7 @@
   const body = document.getElementById("paragraphs");
   if (body) {  // resume-only drafts have no letter
     const count = () => document.getElementById("wordcount").textContent =
-      body.value.trim().split(/\s+/).filter(Boolean).length + " words (aim for 450–500)";
+      body.value.trim().split(/\s+/).filter(Boolean).length + " words (aim for 250–350, 3 paragraphs)";
     body.addEventListener("input", count); count();
   }
 </script>

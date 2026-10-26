@@ -15,9 +15,12 @@
       <label for="notes">Why this company? <span class="subtle">(optional, your own words: what draws you to it,
       any personal connection. The letter's personal part is built from this and nothing is added to it.)</span></label>
     <textarea id="notes" name="notes" rows="3" style="margin-bottom:8px" placeholder="e.g. My family had a rough time with insurance when..."></textarea>
-      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1">
+      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1" checked>
         Resume only, no cover letter <span class="subtle">(for applications that don't take one; faster,
         since it skips the company research and the letter)</span></label>
+      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="check_gaps" value="1" checked>
+        Ask me about skill gaps first <span class="subtle">(skills the posting wants that your profile
+        doesn't show; "yes" answers are added to full-profile.md)</span></label>
       <button type="submit">Draft</button>
     </form>
   {% endif %}

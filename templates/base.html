@@ -18,12 +18,31 @@
     </a>
     <a class="tab {{ 'active' if ep == 'feedback_page' or ep == 'feedback_propose' }}" href="{{ url_for('feedback_page') }}">Feedback</a>
     <a class="tab {{ 'active' if ep in ('applications', 'application_page') }}" href="{{ url_for('applications') }}">Applications</a>
+    <a class="tab {{ 'active' if ep == 'people' }}" href="{{ url_for('people') }}">People</a>
   </nav>
   <main>
+    {% for r in apply_reminders %}
+      <div class="flash remind">Time to apply: you reached out about
+        <a href="{{ url_for('job_detail', job_id=r.id) }}">{{ r.title }} at {{ r.company }}</a>
+        {{ r.reached_at | days_ago }} days ago{% if r.note %} ({{ r.note }}){% endif %} and haven't applied.
+        Apply directly, then mark it applied.</div>
+    {% endfor %}
     {% for category, message in get_flashed_messages(with_categories=true) %}
       <div class="flash {{ category }}">{{ message }}</div>
     {% endfor %}
     {% block content %}{% endblock %}
   </main>
+  <script>
+    // Draft forms: the skill check takes up to a minute before the next page
+    // loads, so say so on the button (and stop a second click).
+    document.addEventListener("submit", e => {
+      const box = e.target.querySelector('input[name="check_gaps"]');
+      // A hidden field (carried over from the requirements warning) counts when it's "1".
+      const on = box && (box.type === "hidden" ? box.value === "1" : box.checked);
+      if (e.defaultPrevented || !on) return;
+      const button = e.target.querySelector('button[type="submit"]');
+      if (button) { button.disabled = true; button.textContent = "Checking the posting for skill gaps…"; }
+    });
+  </script>
 </body>
 </html>

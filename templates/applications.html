@@ -16,7 +16,7 @@
           {% if r.closed_at %}<span class="small subtle">(posting closed)</span>{% endif %}</td>
         <td>{{ r.company }}</td>
         <td class="small">{% if r.app_status %}{{ status_pill(r.app_status) }}{% else %}<span class="subtle">not applied</span>{% endif %}</td>
-        <td class="small">{{ 'PDFs ready' if r.rendered_at else ('draft' if r.has_draft else '–') }}</td>
+        <td class="small">{{ 'files ready' if r.rendered_at else ('draft' if r.has_draft else '–') }}</td>
         <td class="small subtle">{{ (r.status_at or r.updated_at or '')[:10] }}</td>
       </tr>
       {% endfor %}

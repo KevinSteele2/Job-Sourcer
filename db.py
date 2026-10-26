@@ -100,6 +100,49 @@ CREATE TABLE IF NOT EXISTS company_research (
 )
 """
 
+# Your answers to "Have you used X?" before a draft (drafter.find_gaps).
+# A "no" here means the skill isn't asked about again on later drafts; a "yes"
+# is also written into full-profile.md. `skill` is stored lowercased.
+SKILL_ANSWERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS skill_answers (
+    skill       TEXT PRIMARY KEY,
+    answer      TEXT NOT NULL,       -- 'yes' or 'no'
+    details     TEXT,
+    job_id      INTEGER,             -- the draft it was asked for
+    answered_at TEXT NOT NULL
+)
+"""
+
+# Every version of a job's draft: "generated" (what the drafter produced,
+# before your edits), "revised" (after a letter revision), "rendered" (what
+# Save & generate made files from), and "sent" (the rendered version current
+# when you marked the job applied). Comparing generated with sent shows what
+# you change by hand, which is the best signal for improving the prompts.
+DRAFT_VERSIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS draft_versions (
+    id      INTEGER PRIMARY KEY,
+    job_id  INTEGER NOT NULL REFERENCES jobs (id),
+    kind    TEXT NOT NULL,
+    draft   TEXT NOT NULL,       -- the draft JSON at that moment
+    files   TEXT,                -- for "sent": folder holding copies of the files sent
+    at      TEXT NOT NULL
+)
+"""
+
+# People you know, and where they work (the People page). Jobs at a matching
+# company show them (see app.people_at for how names are matched).
+CONTACTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS contacts (
+    id        INTEGER PRIMARY KEY,
+    name      TEXT NOT NULL,
+    company   TEXT NOT NULL,
+    role      TEXT,              -- their job, e.g. "Talent acquisition"
+    how       TEXT,              -- how you know them
+    notes     TEXT,
+    added_at  TEXT NOT NULL
+)
+"""
+
 # Columns added after the table was first created. SQLite's CREATE TABLE IF
 # NOT EXISTS won't change an existing table, so connect() adds any of these
 # that are missing with ALTER TABLE. New columns go here, not in SCHEMA.
@@ -140,6 +183,9 @@ def connect(path: Path = DB_PATH) -> sqlite3.Connection:
     conn.execute(APPLICATION_EVENTS_SCHEMA)
     conn.execute(CLAUDE_CALLS_SCHEMA)
     conn.execute(COMPANY_RESEARCH_SCHEMA)
+    conn.execute(SKILL_ANSWERS_SCHEMA)
+    conn.execute(CONTACTS_SCHEMA)
+    conn.execute(DRAFT_VERSIONS_SCHEMA)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     for name, sql_type in ADDED_COLUMNS.items():
         if name not in existing:
@@ -381,10 +427,13 @@ def feed_jobs_to_filter(conn: sqlite3.Connection, feed: str) -> list[tuple]:
 
 
 def jobs_to_score(conn: sqlite3.Connection, limit: int | None = None) -> list[tuple]:
-    """Open jobs waiting for AI scoring, most promising first (then newest)."""
-    sql = """
-        SELECT id, company, title, location, description FROM jobs
-        WHERE status = 'to_score' AND closed_at IS NULL AND duplicate_of IS NULL
+    """Open jobs waiting for AI scoring, most promising first (then newest).
+
+    Jobs older than MAX_AGE_DAYS are skipped (FRESH), so no usage goes to them.
+    """
+    sql = f"""
+        SELECT id, company, title, location, description FROM jobs j
+        WHERE status = 'to_score' AND closed_at IS NULL AND duplicate_of IS NULL AND {FRESH}
         ORDER BY COALESCE(priority, 0) DESC, first_seen DESC, id
     """
     if limit is not None:
@@ -400,10 +449,10 @@ def jobs_to_recheck(conn: sqlite3.Connection, stamp: str, min_score: int,
     Best first. Skips jobs you've already applied to: a new score wouldn't
     change anything there.
     """
-    sql = """
-        SELECT id, company, title, location, description, score FROM jobs
+    sql = f"""
+        SELECT id, company, title, location, description, score FROM jobs j
         WHERE status = 'scored' AND closed_at IS NULL AND duplicate_of IS NULL
-          AND app_status IS NULL AND score >= ?
+          AND app_status IS NULL AND score >= ? AND {FRESH}
           AND (prompt_version IS NULL OR prompt_version != ?)
         ORDER BY score DESC, first_seen DESC
     """
@@ -428,12 +477,12 @@ def save_score(conn: sqlite3.Connection, row_id: int, result: dict,
 
 def jobs_to_rate(conn: sqlite3.Connection) -> list[tuple]:
     """Open scored jobs you haven't rated yet, highest score first."""
-    return conn.execute("""
+    return conn.execute(f"""
         SELECT j.id, j.company, j.title, j.location, j.url, j.score, j.reason,
                j.matched_skills, j.gaps, j.description
         FROM jobs j LEFT JOIN ratings r ON r.job_id = j.id
         WHERE j.status = 'scored' AND j.closed_at IS NULL AND r.id IS NULL
-          AND j.duplicate_of IS NULL AND j.app_status IS NULL
+          AND j.duplicate_of IS NULL AND j.app_status IS NULL AND {FRESH}
         ORDER BY j.score DESC, j.first_seen DESC
     """).fetchall()
 
@@ -478,17 +527,31 @@ def all_ratings(conn: sqlite3.Connection) -> tuple[list[str], list[tuple]]:
 
 # ---- Queries for the web app (app.py) ----
 
+# Postings older than this leave the working lists (Scored, To score, Listing
+# only) for the "Older than N days" tab, and aren't scored or offered for
+# rating: by then most have hundreds of applicants or are filled. Age is from
+# the posting date, or when it was first found if the source gives none.
+# Jobs at your target companies are kept whatever their age.
+MAX_AGE_DAYS = 14
+_CUTOFF = f"strftime('%Y-%m-%dT%H:%M:%S', 'now', '-{MAX_AGE_DAYS} days')"
+FRESH = f"(COALESCE(j.posted_at, j.first_seen) >= {_CUTOFF} OR j.target = 1)"
+STALE = f"(COALESCE(j.posted_at, j.first_seen) < {_CUTOFF} AND COALESCE(j.target, 0) = 0)"
+
 # The tabs on the Jobs page. Closed jobs get their own tab whatever their status.
 JOB_VIEWS = {
     # Duplicate copies are hidden; their primary copy lists their locations.
     # Jobs you've marked applied leave these lists (they're on the Applied tab
     # and the Applications page).
     "scored": "j.status = 'scored' AND j.closed_at IS NULL AND j.duplicate_of IS NULL"
-              " AND j.app_status IS NULL",
+              f" AND j.app_status IS NULL AND {FRESH}",
     "to_score": "j.status = 'to_score' AND j.closed_at IS NULL AND j.duplicate_of IS NULL"
-                " AND j.app_status IS NULL",
+                f" AND j.app_status IS NULL AND {FRESH}",
     "filtered_out": "j.status = 'filtered_out' AND j.closed_at IS NULL AND j.app_status IS NULL",
-    "no_description": "j.status = 'no_description' AND j.closed_at IS NULL AND j.app_status IS NULL",
+    "no_description": "j.status = 'no_description' AND j.closed_at IS NULL AND j.app_status IS NULL"
+                      f" AND {FRESH}",
+    # Open, unapplied jobs past MAX_AGE_DAYS (kept, with their scores, not deleted).
+    "old": "j.status IN ('scored', 'to_score', 'no_description') AND j.closed_at IS NULL"
+           f" AND j.duplicate_of IS NULL AND j.app_status IS NULL AND {STALE}",
     "closed": "j.closed_at IS NOT NULL",
     "applied": "j.app_status IS NOT NULL",  # whatever else is true of the job
     # Open jobs at your target companies that passed the filter (the filtered-out
@@ -526,7 +589,8 @@ def list_jobs(conn: sqlite3.Connection, view: str, company: str = "",
         params.append(f"%{search}%")
     # Scored jobs by score; waiting jobs in the order they'll be scored.
     if view == "applied":
-        sql += " ORDER BY j.applied_at DESC"  # most recent applications first
+        # Reached out (not applied yet) first, then most recent applications.
+        sql += " ORDER BY j.app_status = 'reached_out' DESC, j.applied_at DESC"
     elif sort == "newest":
         sql += f" ORDER BY {POSTED} DESC"
     elif view == "to_score":
@@ -667,18 +731,41 @@ def list_applications(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 # ---- Application tracker ----
 
-APP_STATUSES = ("applied", "interviewing", "offer", "rejected")
+# "reached_out" = you asked someone there for a referral and haven't applied
+# yet. After REMINDER_DAYS without applying, apply_reminders() lists the job.
+APP_STATUSES = ("reached_out", "applied", "interviewing", "offer", "rejected")
+REMINDER_DAYS = 2
 
 
 def set_app_status(conn: sqlite3.Connection, job_id: int, status: str, note: str, now: str) -> None:
-    """Record a status change. The first time a job is marked, applied_at is set."""
+    """Record a status change. applied_at is set the first time a job is marked
+    anything past "reached_out" (reaching out isn't applying)."""
     if status not in APP_STATUSES:
         raise ValueError(f"unknown status {status!r}")
     with conn:
         conn.execute("INSERT INTO application_events (job_id, status, note, at) VALUES (?, ?, ?, ?)",
                      (job_id, status, note or None, now))
-        conn.execute("UPDATE jobs SET app_status = ?, applied_at = COALESCE(applied_at, ?) WHERE id = ?",
-                     (status, now, job_id))
+        conn.execute("""UPDATE jobs SET app_status = ?,
+                            applied_at = CASE WHEN ? = 'reached_out' THEN applied_at
+                                              ELSE COALESCE(applied_at, ?) END
+                        WHERE id = ?""", (status, status, now, job_id))
+
+
+def apply_reminders(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs still at "reached_out" REMINDER_DAYS or more after you reached out:
+    no referral came through, so it's time to apply directly. Oldest first.
+
+    `reached_at` and `note` come from the latest reached_out event (the note
+    usually says who you asked).
+    """
+    return conn.execute(f"""
+        SELECT j.id, j.title, j.company, e.at AS reached_at, e.note
+        FROM jobs j JOIN application_events e ON e.id = (
+            SELECT MAX(id) FROM application_events WHERE job_id = j.id AND status = 'reached_out')
+        WHERE j.app_status = 'reached_out'
+          AND e.at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-{REMINDER_DAYS} days')
+        ORDER BY e.at
+    """).fetchall()
 
 
 def clear_app_status(conn: sqlite3.Connection, job_id: int) -> None:
@@ -734,6 +821,71 @@ def save_company_research(conn: sqlite3.Connection, company: str, research: dict
             INSERT INTO company_research (company, research, at) VALUES (?, ?, ?)
             ON CONFLICT (company) DO UPDATE SET research = excluded.research, at = excluded.at
         """, (company, json.dumps(research), at))
+
+
+# ---- Skill gap answers (drafter.find_gaps) ----
+
+def answered_skills(conn: sqlite3.Connection) -> set[str]:
+    """Skills you've already answered about (lowercased), so they aren't asked again."""
+    return {r[0] for r in conn.execute("SELECT skill FROM skill_answers")}
+
+
+def save_skill_answer(conn: sqlite3.Connection, skill: str, answer: str, details: str,
+                      job_id: int, at: str) -> None:
+    with conn:
+        conn.execute("""
+            INSERT INTO skill_answers (skill, answer, details, job_id, answered_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (skill) DO UPDATE SET answer = excluded.answer, details = excluded.details,
+                job_id = excluded.job_id, answered_at = excluded.answered_at
+        """, (skill.strip().lower(), answer, details, job_id, at))
+
+
+# ---- Draft versions ----
+
+def save_version(conn: sqlite3.Connection, job_id: int, kind: str, draft: dict, at: str,
+                 files: str | None = None) -> None:
+    with conn:
+        conn.execute("INSERT INTO draft_versions (job_id, kind, draft, files, at) VALUES (?, ?, ?, ?, ?)",
+                     (job_id, kind, json.dumps(draft), files, at))
+
+
+def versions(conn: sqlite3.Connection, job_id: int) -> list[sqlite3.Row]:
+    """A job's draft versions, oldest first."""
+    return conn.execute("SELECT id, kind, files, at, draft FROM draft_versions WHERE job_id = ? ORDER BY at, id",
+                        (job_id,)).fetchall()
+
+
+# ---- People you know (the People page) ----
+
+CONTACT_FIELDS = ("name", "company", "role", "how", "notes")
+
+
+def list_contacts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM contacts ORDER BY company COLLATE NOCASE, name COLLATE NOCASE").fetchall()
+
+
+def save_contact(conn: sqlite3.Connection, fields: dict, at: str, contact_id: int | None = None) -> None:
+    """Add a contact, or update the one with contact_id."""
+    values = [fields.get(f, "").strip() or None for f in CONTACT_FIELDS]
+    with conn:
+        if contact_id:
+            conn.execute("UPDATE contacts SET name = ?, company = ?, role = ?, how = ?, notes = ? WHERE id = ?",
+                         (*values, contact_id))
+        else:
+            conn.execute("INSERT INTO contacts (name, company, role, how, notes, added_at) VALUES (?, ?, ?, ?, ?, ?)",
+                         (*values, at))
+
+
+def delete_contact(conn: sqlite3.Connection, contact_id: int) -> None:
+    with conn:
+        conn.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+
+
+def open_job_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Jobs per company on the Scored tab (open, recent, not applied), for the People page."""
+    return {r[0]: r[1] for r in conn.execute(
+        f"SELECT j.company, COUNT(*) FROM jobs j WHERE {JOB_VIEWS['scored']} GROUP BY j.company")}
 
 
 # ---- Target companies (targets.py) ----

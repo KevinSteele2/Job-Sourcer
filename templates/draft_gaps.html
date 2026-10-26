@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Skill check · {{ job.title }}{% endblock %}
+{% block content %}
+<h1>Before drafting: anything your profile is missing?</h1>
+<p class="subtle">{{ job.company }} · {{ job.title }} · <a href="{{ url_for('job_detail', job_id=job.id) }}">back to the job</a></p>
+
+<form method="post" action="{{ url_for('draft_start', job_id=job.id) }}" class="panel">
+  <p class="small subtle">The posting asks for these, and full-profile.md doesn't show them. If you've
+    done any of them (a class, a side project, a job), say <b>Yes</b> and where, in a line of your own
+    words: it's added to full-profile.md, so this draft and every later one can use it. A <b>No</b> is
+    remembered, so you won't be asked about that skill again. Skip any you're not sure about.</p>
+
+  <input type="hidden" name="gaps_done" value="1">
+  <input type="hidden" name="gap_count" value="{{ gaps | length }}">
+  <input type="hidden" name="model" value="{{ model }}">
+  <input type="hidden" name="notes" value="{{ notes }}">
+  {% if resume_only %}<input type="hidden" name="resume_only" value="1">{% endif %}
+
+  {% for g in gaps %}
+    {% set i = loop.index0 %}
+    <div style="margin:14px 0; padding-top:12px; border-top:1px solid var(--border, #ddd)">
+      <input type="hidden" name="skill_{{ i }}" value="{{ g.skill }}">
+      <div><b>{{ g.question }}</b></div>
+      <div class="small subtle" style="margin:4px 0 8px">The posting: “{{ g.quote }}”</div>
+      <div class="row" style="gap:16px; align-items:center">
+        <label class="checkbox"><input type="radio" name="answer_{{ i }}" value="yes"> Yes</label>
+        <label class="checkbox"><input type="radio" name="answer_{{ i }}" value="no"> No</label>
+      </div>
+      <input type="text" name="details_{{ i }}" style="margin-top:6px; width:100%"
+             placeholder="If yes: where and how? e.g. Used it in my SQ3R team project to run the database">
+    </div>
+  {% endfor %}
+
+  <button type="submit">Save answers and draft</button>
+</form>
+{% endblock %}

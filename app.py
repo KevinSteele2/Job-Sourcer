@@ -12,6 +12,7 @@ import csv
 import io
 import json
 import os
+import re
 import secrets
 import socket
 import threading
@@ -29,6 +30,7 @@ import drafter
 import fetch
 import import_feed
 import liveness
+import nightly
 import score
 import sweep
 import targets
@@ -40,8 +42,8 @@ DATA_DIR = db.DB_PATH.parent
 MODELS = [("sonnet", "Sonnet (balanced)"), ("haiku", "Haiku (uses the least quota)"),
           ("opus", "Opus"), ("", "Claude Code default")]
 VIEW_LABELS = {"scored": "Scored", "to_score": "To score", "filtered_out": "Filtered out",
-               "no_description": "Listing only", "closed": "Closed", "applied": "Applied",
-               "targets": "★ Target companies"}
+               "no_description": "Listing only", "closed": "Closed", "applied": "Applied & reached out",
+               "targets": "★ Target companies", "old": f"Older than {db.MAX_AGE_DAYS} days"}
 
 app = Flask(__name__)
 # Flask signs its flash-message cookie with this. A fresh random key each
@@ -77,6 +79,27 @@ def local_date(value):
 @app.template_filter("fromjson")
 def fromjson(value):
     return json.loads(value) if value else []
+
+
+@app.template_filter("plus_days")
+def plus_days(value, days):
+    """A UTC ISO timestamp moved forward by `days`, still as an ISO timestamp."""
+    when = datetime.fromisoformat(value.replace("Z", "+00:00")) + timedelta(days=days)
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@app.context_processor
+def inject_reminders():
+    """Jobs you reached out about REMINDER_DAYS+ days ago and still haven't
+    applied to: shown as a banner on every page until you mark them applied."""
+    conn = db.connect()
+    reminders = db.apply_reminders(conn)
+    conn.close()
+    return {"apply_reminders": reminders}
+
+
+# A global (not a context variable), so imported macros like tracker() see it too.
+app.jinja_env.globals["reminder_days"] = db.REMINDER_DAYS
 
 
 @app.context_processor
@@ -129,13 +152,21 @@ def job_detail(job_id):
 def job_status(job_id):
     status = request.form.get("status", "")
     conn = db.connect()
+    job = db.get_job(conn, job_id)
+    first_apply = status == "applied" and job is not None and not job["applied_at"]
     try:
         db.set_app_status(conn, job_id, status, request.form.get("note", "").strip(),
                           datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        flash(f"Marked as {status}.", "ok")
+        flash(f"Marked as {status.replace('_', ' ')}.", "ok")
     except ValueError:
         flash("Pick a status.", "error")
+        first_apply = False
     conn.close()
+    if first_apply:
+        # Keep exactly what was sent: a later redraft overwrites the files.
+        sent = drafter.snapshot_sent(job_id)
+        if sent:
+            flash(f"Saved a copy of the files you sent in \"{Path(sent).name}\".", "ok")
     # Back to whichever page the button was on (job page or draft page).
     return redirect(request.referrer or url_for("job_detail", job_id=job_id))
 
@@ -281,6 +312,78 @@ def inject_targets():
     return {"target_companies": _targets_by_key()}
 
 
+# ---------- People you know ----------
+
+def _company_key(name: str) -> str:
+    """Lowercase letters and digits only: "LCS Living" -> "lcsliving"."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _word_prefixes(name: str) -> set[str]:
+    """Keys of the name's leading words: "LCS Living" -> {"lcs", "lcsliving"}."""
+    words = re.findall(r"[a-z0-9]+", (name or "").lower())
+    return {"".join(words[:i]) for i in range(1, len(words) + 1)}
+
+
+def _same_company(job_company: str, contact_company: str) -> bool:
+    """Does a job's company (often a board name like "lcs") match a contact's
+    company as you typed it ("LCS Living")?
+
+    They match when one, ignoring case and punctuation, equals the other or
+    its first few whole words: "lcs" matches "LCS Living", "Acme Robotics"
+    matches "Acme". Partial words don't, so "meta" doesn't match "Metabase".
+    """
+    a, b = _company_key(job_company), _company_key(contact_company)
+    if not a or not b:
+        return False
+    return a in _word_prefixes(contact_company) or b in _word_prefixes(job_company)
+
+
+@app.context_processor
+def inject_people():
+    """people_at(company) in every template: the contacts you have there."""
+    conn = db.connect()
+    contacts = db.list_contacts(conn)
+    conn.close()
+    return {"people_at": lambda company: [c for c in contacts if _same_company(company, c["company"])]}
+
+
+@app.route("/people")
+def people():
+    conn = db.connect()
+    contacts = db.list_contacts(conn)
+    counts = db.open_job_counts(conn)
+    conn.close()
+    # For each contact, the job boards at their company with open jobs:
+    # [(board company name, count)], linked to the Jobs page filtered to it.
+    jobs_at = {c["id"]: [(name, n) for name, n in counts.items() if _same_company(name, c["company"])]
+               for c in contacts}
+    editing = next((c for c in contacts if str(c["id"]) == request.args.get("edit")), None)
+    return render_template("people.html", contacts=contacts, jobs_at=jobs_at, editing=editing)
+
+
+@app.post("/people")
+def people_save():
+    if not request.form.get("name", "").strip() or not request.form.get("company", "").strip():
+        flash("A contact needs a name and a company.", "error")
+        return redirect(url_for("people"))
+    conn = db.connect()
+    db.save_contact(conn, request.form, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    request.form.get("id", type=int))
+    conn.close()
+    flash("Contact saved.", "ok")
+    return redirect(url_for("people"))
+
+
+@app.post("/people/<int:contact_id>/delete")
+def people_delete(contact_id):
+    conn = db.connect()
+    db.delete_contact(conn, contact_id)
+    conn.close()
+    flash("Contact removed.", "ok")
+    return redirect(url_for("people"))
+
+
 @app.post("/targets")
 def targets_check():
     """Synchronous, like the liveness check: a minute or two (Meta pages load in Edge)."""
@@ -409,6 +512,10 @@ def score_start():
     if not scorer.PROFILE_PATH.exists():
         flash("profile.md is missing. Scoring needs it.", "error")
         return redirect(url_for("score_page"))
+    if nightly.is_running():
+        # Both would pull the same jobs from jobs_to_score and score them twice.
+        flash("The nightly run is going right now (it scores too). Try again when it finishes.", "error")
+        return redirect(url_for("score_page"))
     limit = request.form.get("limit", type=int)
     batch_size = request.form.get("batch_size", score.DEFAULT_BATCH_SIZE, type=int)
     model = request.form.get("model") or None
@@ -442,11 +549,57 @@ def score_status():
 
 # ---------- Applications (resume + cover letter drafts) ----------
 
+# Plain-English names for scorer.GATE_CAPS, for the warning before drafting.
+GATE_LABELS = {
+    "experience_5plus": "Requires 5+ years of experience",
+    "experience_3to4": "Requires 3-4 years of experience",
+    "clearance": "Requires an active security clearance",
+    "credential": "Requires a license, certification, or advanced degree you don't have",
+    "management": "Requires people-management experience",
+    "language": "Requires fluency in a language other than English",
+    "location": "Requires living or being authorized to work outside the US",
+    "enrollment": "Only for current students or later graduates",
+}
+
+
 @app.post("/job/<int:job_id>/draft")
 def draft_start(job_id):
     model = request.form.get("model") or drafter.DEFAULT_MODEL
     notes = request.form.get("notes", "")
     resume_only = request.form.get("resume_only") == "1"  # an unchecked box isn't sent
+    if DRAFTING.running:
+        flash("Another draft is still being written. Try again when it finishes.", "error")
+        return redirect(url_for("job_detail", job_id=job_id))
+
+    # Step 0: a requirement the scorer found, with its quote verified in the
+    # posting, that the profile can't meet (years, clearance, current
+    # student...). Show the posting's own words and ask before spending a
+    # draft on it. "gates_ok" is set by that page's "Draft anyway" button.
+    if request.form.get("gates_ok") != "1" and request.form.get("gaps_done") != "1":
+        conn = db.connect()
+        job = db.get_job(conn, job_id)
+        conn.close()
+        gates = [g for g in json.loads(job["hard_gates"] or "[]") if g.get("verified")] if job else []
+        if gates:
+            return render_template("draft_gates.html", job=job, gates=gates, labels=GATE_LABELS,
+                                   form=request.form)
+
+    if request.form.get("gaps_done") == "1":
+        _save_gap_answers(job_id, request.form)
+    elif request.form.get("check_gaps") == "1":
+        # Step 1: ask about skills the posting wants that the profile doesn't show.
+        # This waits for one quick Sonnet call (the button says so while it runs).
+        try:
+            gaps = drafter.find_gaps(job_id)
+        except Exception as e:  # the check helps, but never blocks a draft
+            gaps = []
+            flash(f"The skill check didn't work ({str(e)[:200]}), so drafting went ahead without it.", "error")
+        if gaps:
+            conn = db.connect()
+            job = db.get_job(conn, job_id)
+            conn.close()
+            return render_template("draft_gaps.html", job=job, gaps=gaps, model=model,
+                                   notes=notes, resume_only=resume_only)
 
     def work(task):
         task.update(total=job_id)  # which job is being drafted, for the status page
@@ -457,6 +610,31 @@ def draft_start(job_id):
         flash("Another draft is still being written. Try again when it finishes.", "error")
         return redirect(url_for("job_detail", job_id=job_id))
     return redirect(url_for("application_page", job_id=job_id))
+
+
+def _save_gap_answers(job_id: int, form) -> None:
+    """Record each answered skill question; "yes" ones also go into full-profile.md.
+
+    Form fields per question i: skill_i, answer_i ("yes"/"no", absent if left
+    unanswered) and details_i. Unanswered questions aren't saved, so they're
+    asked again next time.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = db.connect()
+    job = db.get_job(conn, job_id)
+    confirmed = []
+    for i in range(int(form.get("gap_count", 0))):
+        skill, answer = form.get(f"skill_{i}", "").strip(), form.get(f"answer_{i}")
+        details = form.get(f"details_{i}", "").strip()
+        if not skill or answer not in ("yes", "no"):
+            continue
+        db.save_skill_answer(conn, skill, answer, details, job_id, now)
+        if answer == "yes":
+            confirmed.append((skill, details))
+    conn.close()
+    if confirmed:
+        drafter.add_confirmed_skills(confirmed, job)
+        flash(f"Added to full-profile.md: {', '.join(s for s, _ in confirmed)}.", "ok")
 
 
 @app.route("/draft/status")
@@ -494,28 +672,56 @@ def application_page(job_id):
         folder = Path(app_row["folder"])
         name = drafter.contact_info(drafter.read_profile())["name"]
         rendered = {kind: f for kind, f in (("resume", f"{name} Resume.pdf"),
-                                            ("cover", f"{name} Cover Letter.pdf"))
+                                            ("cover", f"{name} Cover Letter.pdf"),
+                                            ("resume_docx", f"{name} Resume.docx"),
+                                            ("cover_docx", f"{name} Cover Letter.docx"))
                     if (folder / f).exists()}
     conn = db.connect()
     events = db.app_events(conn, job_id)
+    versions = db.versions(conn, job_id)
     conn.close()
+    draft = json.loads(app_row["draft"])
+    drafter.upgrade_resume(draft["resume"])  # drafts from before bullets open in the new editor
+    edits = _hand_edits(versions, draft)
     return render_template("application.html", job=job, app=app_row, events=events,
-                           draft=json.loads(app_row["draft"]),
+                           draft=draft,
                            review=json.loads(app_row["review"] or "{}"),
-                           rendered=rendered, models=MODELS)
+                           rendered=rendered, models=MODELS, versions=versions, edits=edits,
+                           edits_changed=sum(1 for l in edits or [] if l[:1] in "+-"
+                                             and not l.startswith(("+++", "---"))))
+
+
+def _draft_lines(draft: dict) -> list[str]:
+    """A draft as plain lines of what gets printed, for comparing versions."""
+    resume = drafter.upgrade_resume(json.loads(json.dumps(draft["resume"])))
+    lines = [resume["summary"]]
+    for p in resume["projects"]:
+        lines += [f"{p['name']} | {p.get('tech', '')}", *(f"- {b}" for b in p["bullets"])]
+    for e in resume["experience"]:
+        lines += [e["heading"], *(f"- {b}" for b in e["bullets"])]
+    lines += [f"{s['label']}: {', '.join(s['items'])}" for s in resume["skills"]]
+    if draft.get("cover_letter"):
+        lines += draft["cover_letter"]["paragraphs"]
+    return lines
+
+
+def _hand_edits(versions, current: dict) -> list[str] | None:
+    """What you changed by hand: the latest generated (or revised) version
+    against the sent version, or against the current draft if not sent yet.
+    A unified diff, or None if there's nothing to compare."""
+    import difflib
+    made = [v for v in versions if v["kind"] in ("generated", "revised")]
+    if not made:
+        return None
+    sent = [v for v in versions if v["kind"] == "sent"]
+    after = json.loads(sent[-1]["draft"]) if sent else current
+    diff = list(difflib.unified_diff(_draft_lines(json.loads(made[-1]["draft"])), _draft_lines(after),
+                                     "as generated", "as sent" if sent else "now", lineterm="", n=0))
+    return [l for l in diff if not l.startswith("@@")]
 
 
 def _draft_from_form(form, old: dict) -> dict:
     """Rebuild the draft from the editor. A blank item is removed."""
-    def items(prefix, fields):
-        out, i = [], 0
-        while f"{prefix}_{fields[0]}_{i}" in form:
-            item = {f: form.get(f"{prefix}_{f}_{i}", "").strip() for f in fields}
-            if all(item.values()):
-                out.append(item)
-            i += 1
-        return out
-
     def text(name):
         # Browsers send textarea line breaks as \r\n; normalize to \n.
         return form.get(name, "").replace("\r\n", "\n")
@@ -523,12 +729,37 @@ def _draft_from_form(form, old: dict) -> dict:
     def lines(name, sep="\n"):
         return [x.strip() for x in text(name).split(sep) if x.strip()]
 
+    def items(prefix, key, extra=()):
+        """Entries with a name/heading, optional extra text fields, and a
+        bullets box (one bullet per line). No name or no bullets = removed."""
+        out, i = [], 0
+        while f"{prefix}_{key}_{i}" in form:
+            item = {key: form.get(f"{prefix}_{key}_{i}", "").strip(),
+                    **{f: form.get(f"{prefix}_{f}_{i}", "").strip() for f in extra},
+                    "bullets": lines(f"{prefix}_bullets_{i}")}
+            if item[key] and item["bullets"]:
+                out.append(item)
+            i += 1
+        return out
+
+    def skill_lines():
+        # "Languages: Python, SQL" -> {"label": "Languages", "items": [...]};
+        # a line with no colon is filed under "Skills".
+        out = []
+        for line in lines("skills"):
+            label, colon, rest = line.partition(":")
+            label, rest = (label.strip(), rest) if colon else ("Skills", label)
+            entries = [x.strip() for x in rest.split(",") if x.strip()]
+            if entries:
+                out.append({"label": label, "items": entries})
+        return out
+
     draft = dict(old)
     draft["resume"] = {
         "summary": form.get("summary", "").strip(),
-        "projects": items("project", ["name", "description"]),
-        "experience": items("exp", ["heading", "description"]),
-        "skills": lines("skills"),
+        "projects": items("project", "name", ("tech",)),
+        "experience": items("exp", "heading"),
+        "skills": skill_lines(),
         "education": form.get("education", "").strip(),
         "coursework": lines("coursework", ","),
     }
@@ -550,6 +781,10 @@ def application_save(job_id):
     if app_row is None:
         abort(404)
     draft = _draft_from_form(request.form, json.loads(app_row["draft"]))
+    # Your edits can't drift from the fixed lines either: a known heading or
+    # project name is put back to its canonical form, anything else is flagged.
+    for warning in drafter.canonical_checks(drafter.read_profile(), draft["resume"]):
+        flash(warning, "error")
     db.update_draft(conn, job_id, draft, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     conn.close()
 
@@ -575,12 +810,12 @@ def application_save(job_id):
     try:
         out = drafter.render(job_id)
     except (drafter.DraftError, FileNotFoundError) as e:
-        flash(f"Couldn't make the PDFs: {e}", "error")
+        flash(f"Couldn't make the files: {e}", "error")
         return redirect(url_for("application_page", job_id=job_id))
     if out["resume_pages"] > 1:
         flash(f"The resume runs to {out['resume_pages']} pages. Shorten a few lines and generate again.", "error")
     else:
-        flash("PDFs ready.", "ok")
+        flash("PDF and Word files ready.", "ok")
     return redirect(url_for("application_page", job_id=job_id))
 
 
@@ -606,11 +841,13 @@ def application_file(job_id, kind):
     conn = db.connect()
     app_row = db.get_application(conn, job_id)
     conn.close()
-    if app_row is None or not app_row["folder"] or kind not in ("resume", "cover"):
+    fmt = request.args.get("format", "pdf")
+    if app_row is None or not app_row["folder"] or kind not in ("resume", "cover") or fmt not in ("pdf", "docx"):
         abort(404)
     name = drafter.contact_info(drafter.read_profile())["name"]
-    filename = f"{name} Resume.pdf" if kind == "resume" else f"{name} Cover Letter.pdf"
-    return send_from_directory(app_row["folder"], filename)
+    filename = f"{name} Resume.{fmt}" if kind == "resume" else f"{name} Cover Letter.{fmt}"
+    # A .docx can't show in the browser, so it downloads; a PDF opens in a tab.
+    return send_from_directory(app_row["folder"], filename, as_attachment=fmt == "docx")
 
 
 @app.post("/application/<int:job_id>/open-folder")

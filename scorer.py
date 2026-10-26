@@ -13,12 +13,12 @@ FEEDBACK_PATH = ROOT / "feedback.md"
 
 # Bump this whenever INSTRUCTIONS or RUBRIC change, so each score in the
 # database records which version of the prompt produced it.
-PROMPT_VERSION = "v5"  # v5: the enrollment gate
+PROMPT_VERSION = "v6"  # v6: caps only in code (not the rubric); "not a gate" wording for years
 
 # Hard gates: requirements that rule the candidate out however good the fit.
 # The model only reports them, with a quote; Python applies the cap, so a
 # 9 can never reach the top of the list for a job the candidate can't take.
-# Caps mirror the rubric's own rules.
+# The rubric no longer states caps: these are the only place they live.
 GATE_CAPS = {
     "experience_5plus": 3,   # a REQUIRED minimum of 5+ years
     "experience_3to4": 5,    # a REQUIRED minimum of 3-4 years
@@ -56,6 +56,10 @@ Hard gates are requirements the candidate cannot meet, whatever the fit:
   between December 2026 and June 2027", "Class of 2027", "returning to school
   after the internship"). Compare with the graduation date in the profile.
   A role open to recent graduates is not a gate.
+Not experience gates: a range that starts at 2 years or fewer ("0-3 years",
+"2-4 years"); a years requirement with an alternative ("3+ years of experience
+or a Master's degree", "or equivalent education"); years that count
+internships, research, or academic projects.
 Only list a gate the posting actually requires. Anything "preferred", "a plus",
 "nice to have", or "ability to obtain" is never a gate. For each gate, copy the
 exact words from the posting into "quote" (verbatim, no paraphrasing); a quote
@@ -100,11 +104,11 @@ Score how strongly the candidate should apply, combining two questions:
 Rules:
 - Required experience is the strongest signal. "New grad", "entry level", or
   0-2 years: no penalty. "2+ years": lower by 1-2 if skills otherwise match.
-  "3-4 years" required: score at most 5. "5+ years" required: score at most 3.
+- Hard requirements the candidate can't meet (3+ years required, a clearance,
+  a required credential...) are listed as hard gates, and the pipeline caps
+  the score for them. Score the fit as if they weren't there.
 - Separate required from preferred qualifications. A missing preferred item
   lowers the score by at most 1.
-- A required credential the profile doesn't show (security clearance, a
-  specific certification, an advanced degree) caps the score at 4.
 - Only count skills the profile actually shows. Don't assume the candidate
   knows a tool because it's related to one they know.
 - Company prestige or brand does not raise the score.
@@ -113,6 +117,15 @@ Rules:
 
 class UsageLimitError(Exception):
     """Claude Code reported a usage/rate limit. The whole run should stop."""
+
+
+class AuthError(UsageLimitError):
+    """Claude Code isn't logged in (the login expired). Every call would fail,
+    so the run stops. A subclass of UsageLimitError, so everything that already
+    stops on a usage limit stops on this too; the message says what to do."""
+
+    def __init__(self, detail: str):
+        super().__init__(f"Claude login expired: run `claude /login` in a terminal ({detail[:150]})")
 
 
 class ScoringError(Exception):
@@ -236,6 +249,8 @@ def call_claude(prompt: str, model: str | None = None, timeout: int = 600,
     if envelope.get("is_error") or proc.returncode != 0:
         if envelope.get("api_error_status") == 429:
             raise UsageLimitError(result_text or "HTTP 429")
+        if envelope.get("api_error_status") == 401:
+            raise AuthError(result_text or "HTTP 401")
         _raise_if_limit(result_text + stderr)
         raise ScoringError(f"claude error: {result_text[:300] or stderr[:300]}")
 
@@ -271,7 +286,14 @@ LIMIT_PATTERN = re.compile(r"usage limit|rate limit|limit reached|hit your limit
                            re.IGNORECASE)
 
 
+# Phrases Claude Code uses when it isn't logged in or the login expired.
+AUTH_PATTERN = re.compile(r"/login|not logged in|oauth|authenticat|invalid api key|\b401\b",
+                          re.IGNORECASE)
+
+
 def _raise_if_limit(text: str) -> None:
+    if AUTH_PATTERN.search(text):
+        raise AuthError(text.strip())
     if LIMIT_PATTERN.search(text):
         raise UsageLimitError(text.strip()[:300])
 

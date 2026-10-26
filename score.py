@@ -116,7 +116,8 @@ def score_jobs(limit: int | None, model: str | None, batch_size: int = DEFAULT_B
                             on_result(f"{job['company']}: {job['title']}", outcome)
                 pending = [j for j in pending if str(j["id"]) in errors]
         except scorer.UsageLimitError as e:
-            stopped_reason = f"usage limit: {e}"
+            # An expired login says so plainly; a real limit says "usage limit".
+            stopped_reason = str(e) if isinstance(e, scorer.AuthError) else f"usage limit: {e}"
             break  # everything unscored stays to_score for the next run
 
         for job in pending:  # still failing after the retry
@@ -125,9 +126,7 @@ def score_jobs(limit: int | None, model: str | None, batch_size: int = DEFAULT_B
             if on_result:
                 on_result(f"{job['company']}: {job['title']}", "failed (logged)")
 
-    remaining = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE status = 'to_score' AND closed_at IS NULL"
-        " AND duplicate_of IS NULL").fetchone()[0]
+    remaining = len(db.jobs_to_score(conn))  # excludes jobs past db.MAX_AGE_DAYS
     stale_left = len(db.jobs_to_recheck(conn, stamp, recheck_min_score, None))
     conn.close()
     return {"scored": scored, "failed": failed, "remaining": remaining,
@@ -136,6 +135,9 @@ def score_jobs(limit: int | None, model: str | None, batch_size: int = DEFAULT_B
 
 
 def main() -> None:
+    # The Windows console can't print every character (emoji in postings), and
+    # one would crash --dry-run; print a "?" for those instead.
+    sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description="Score to_score jobs with Claude Code.")
     parser.add_argument("--limit", type=int, help="score at most this many jobs this run")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,

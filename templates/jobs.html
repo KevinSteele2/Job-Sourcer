@@ -56,7 +56,8 @@
         <td class="num">{{ r.my_rating if r.my_rating is not none else '' }}</td>
         <td>{% if r.target %}<span title="Target company{{ ': ' ~ target_companies[r.company.lower()].connection if target_companies.get(r.company.lower()) and target_companies[r.company.lower()].connection }}">★</span> {% endif %}<a href="{{ url_for('job_detail', job_id=r.id) }}">{{ r.title }}</a>
           {% if r.app_status and view != 'applied' %} {{ status_pill(r.app_status) }}{% endif %}</td>
-        <td>{{ r.company }}</td>
+        {% set known = people_at(r.company) %}
+        <td>{{ r.company }}{% if known %} <span class="small" title="You know: {{ known | map(attribute='name') | join(', ') }}">👤 {{ known | map(attribute='name') | join(', ') }}</span>{% endif %}</td>
         <td class="loc">{{ r.location }}{% if r.copies %} <span class="subtle small">+{{ r.copies }} more</span>{% endif %}</td>
         <td>{{ age_badge(r.posted_at, r.first_seen) }}</td>
         {% if view in ('filtered_out', 'closed', 'targets') %}

@@ -255,6 +255,10 @@ pre.prompt, .log {
 .pill.interviewing { background: var(--mid); }
 .pill.offer { background: var(--good); }
 .pill.rejected { background: var(--low); }
+.pill.reached_out { background: #7a5bd6; }
+/* "Time to apply" reminder, on every page (base.html). */
+.flash.remind { background: var(--error-bg); color: var(--error-text); border-left: 4px solid var(--error-text); }
+.flash.remind a { color: inherit; font-weight: 600; }
 ul.history { list-style: none; padding: 0; margin: 12px 0 6px; }
 ul.history li { padding: 3px 0; }
 button.linkish {

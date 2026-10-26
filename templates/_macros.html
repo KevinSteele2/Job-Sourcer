@@ -22,36 +22,44 @@
 
 {# Status pill for the application tracker. #}
 {% macro status_pill(status) -%}
-  {%- if status -%}<span class="pill {{ status }}">{{ status | capitalize }}</span>{%- endif -%}
+  {%- if status -%}<span class="pill {{ status }}">{{ status.replace('_', ' ') | capitalize }}</span>{%- endif -%}
 {%- endmacro %}
 
 {# Application tracker panel: current status, update form, history, undo.
    Used on the job page and the draft page. #}
 {% macro tracker(job, events) %}
-{% set next_status = {"applied": "interviewing", "interviewing": "offer"}.get(job.app_status, job.app_status) %}
+{% set next_status = {"reached_out": "applied", "applied": "interviewing", "interviewing": "offer"}.get(job.app_status, job.app_status) %}
+{% set reached = events | selectattr("status", "equalto", "reached_out") | list %}
 <div class="panel">
   <div class="row" style="justify-content:space-between; align-items:flex-start">
     <div>
       <h2 style="margin-bottom:6px">Application status</h2>
-      {% if job.app_status %}
+      {% if job.app_status == "reached_out" and reached %}
         {{ status_pill(job.app_status) }}
-        <span class="small subtle">applied {{ job.applied_at[:10] }}</span>
+        <span class="small subtle">{{ reached[-1].at | local_date }}{% if reached[-1].note %} ({{ reached[-1].note }}){% endif %}.
+          If you haven't heard back, apply by <b>{{ reached[-1].at | plus_days(reminder_days) | local_date }}</b>; you'll be reminded then.</span>
+      {% elif job.app_status %}
+        {{ status_pill(job.app_status) }}
+        {% if job.applied_at %}<span class="small subtle">applied {{ job.applied_at[:10] }}</span>{% endif %}
       {% else %}
-        <span class="small subtle">Not applied yet.</span>
+        <span class="small subtle">Not applied yet. Know someone there? Ask for a referral first, then mark it reached out.</span>
       {% endif %}
     </div>
     <form method="post" action="{{ url_for('job_status', job_id=job.id) }}" class="row" style="margin:0">
       {% if job.app_status %}
         <select name="status">
-          {% for s in ("applied", "interviewing", "offer", "rejected") %}
-            <option value="{{ s }}" {{ 'selected' if s == next_status }}>{{ s | capitalize }}</option>
+          {% for s in ("reached_out", "applied", "interviewing", "offer", "rejected") %}
+            <option value="{{ s }}" {{ 'selected' if s == next_status }}>{{ s.replace('_', ' ') | capitalize }}</option>
           {% endfor %}
         </select>
+        <input type="text" name="note" placeholder="Note (optional), e.g. phone screen 10/12" style="width:260px">
+        <button type="submit">Update</button>
       {% else %}
-        <input type="hidden" name="status" value="applied">
+        <input type="text" name="note" placeholder="Note (optional), e.g. who you asked" style="width:240px">
+        <button type="submit" name="status" value="applied">Mark as applied</button>
+        <button class="secondary" type="submit" name="status" value="reached_out"
+                title="You asked someone there for a referral. In {{ reminder_days }} days without applying, you're reminded to apply.">Reached out for a referral</button>
       {% endif %}
-      <input type="text" name="note" placeholder="Note (optional), e.g. phone screen 10/12" style="width:260px">
-      <button type="submit">{{ 'Update' if job.app_status else 'Mark as applied' }}</button>
     </form>
   </div>
   {% if events %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}People{% endblock %}
+{% block content %}
+<h1>People you know</h1>
+<p class="subtle">Contacts and where they work. Jobs at their company show 👤 and their name, on the job list and the job's page.
+  Companies are matched loosely by name, so "LCS Living" matches the board "lcs".</p>
+
+<div class="panel">
+  {% if contacts %}
+  <table>
+    <thead><tr><th>Name</th><th>Company</th><th>Their role</th><th>How you know them</th><th>Notes</th><th>Scored jobs there</th><th></th></tr></thead>
+    <tbody>
+      {% for c in contacts %}
+      <tr>
+        <td><b>{{ c.name }}</b></td>
+        <td>{{ c.company }}</td>
+        <td>{{ c.role or '' }}</td>
+        <td>{{ c.how or '' }}</td>
+        <td class="small">{{ c.notes or '' }}</td>
+        <td class="small">
+          {% for name, n in jobs_at[c.id] %}<a href="{{ url_for('jobs', view='scored', company=name) }}">{{ n }} at {{ name }}</a>{% if not loop.last %}, {% endif %}
+          {% else %}<span class="subtle">none found</span>{% endfor %}
+        </td>
+        <td class="row" style="gap:6px">
+          <a class="button secondary" href="{{ url_for('people', edit=c.id) }}">Edit</a>
+          <form method="post" action="{{ url_for('people_delete', contact_id=c.id) }}" style="margin:0"
+                onsubmit="return confirm('Remove {{ c.name }}?');">
+            <button class="secondary" type="submit">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="subtle">No contacts yet.</p>
+  {% endif %}
+</div>
+
+<form method="post" action="{{ url_for('people_save') }}" class="panel">
+  <h2>{{ 'Edit ' ~ editing.name if editing else 'Add someone' }}</h2>
+  {% if editing %}<input type="hidden" name="id" value="{{ editing.id }}">{% endif %}
+  <div class="row" style="gap:12px; flex-wrap:wrap">
+    <label>Name <input name="name" required value="{{ editing.name if editing else '' }}"></label>
+    <label>Company <input name="company" required value="{{ editing.company if editing else '' }}" placeholder="e.g. LCS Living"></label>
+    <label>Their role <input name="role" value="{{ editing.role or '' if editing else '' }}" placeholder="e.g. Talent acquisition"></label>
+    <label>How you know them <input name="how" value="{{ editing.how or '' if editing else '' }}" placeholder="e.g. met at a career fair"></label>
+  </div>
+  <label style="display:block; margin-top:8px">Notes
+    <textarea name="notes" rows="2" placeholder="e.g. offered to pass my resume along">{{ editing.notes or '' if editing else '' }}</textarea></label>
+  <div class="row" style="margin-top:8px; gap:8px">
+    <button type="submit">{{ 'Save changes' if editing else 'Add' }}</button>
+    {% if editing %}<a class="button secondary" href="{{ url_for('people') }}">Cancel</a>{% endif %}
+  </div>
+</form>
+{% endblock %}

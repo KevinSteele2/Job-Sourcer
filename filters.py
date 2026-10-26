@@ -53,6 +53,32 @@ def load_rules(path: Path = FILTERS_PATH) -> Rules:
     )
 
 
+# A place that clearly says it's in the US is never excluded, even when a
+# foreign-sounding word in it is on the exclude list ("Vienna, VA", "Berlin,
+# CT", "Albuquerque, New Mexico, United States", "United States and Canada").
+# The signal: "United States", "USA", "U.S." or a whole-word "US", or a US
+# state code after a comma ("Dublin, CA"), unless the same place also names
+# another country ("Toronto, ON, Canada" has no US state code anyway).
+US_STATES = ("AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO "
+             "MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC").split()
+US_NAMED = re.compile(r"United States|\bUSA\b|\bU\.S\.|(?<![A-Za-z])US(?![A-Za-z])")
+# Spelled-out states too ("Dublin, Ohio"). Not Georgia: it's also a country.
+US_STATE_NAMES = ("Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|"
+                  "Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|"
+                  "Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|"
+                  "New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|"
+                  "Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|"
+                  "Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming")
+US_STATE = re.compile(r",\s*(?:" + "|".join(US_STATES) + r")\b|,\s*(?:" + US_STATE_NAMES + r")\b")
+OTHER_COUNTRY = re.compile(r"\b(?:Canada|United Kingdom|UK|India|Germany|Ireland|Australia|France|Mexico)\b")
+
+
+def is_us_place(place: str) -> bool:
+    if US_NAMED.search(place):
+        return True
+    return bool(US_STATE.search(place)) and not OTHER_COUNTRY.search(place.replace("New Mexico", ""))
+
+
 def check(title: str, location: str, rules: Rules) -> str | None:
     """Return why a job fails the rules, or None if it passes."""
     for keyword, pattern in rules.title_exclude:
@@ -73,7 +99,8 @@ def check(title: str, location: str, rules: Rules) -> str | None:
     # stays, "London; Dublin" goes. Locations are separated by ";" or "|".
     places = [p.strip() for p in re.split(r"[;|]", location) if p.strip()]
     if rules.location_exclude and places:
-        matched = [next((kw for kw, p in rules.location_exclude if p.search(place)), None)
+        matched = [None if is_us_place(place) else
+                   next((kw for kw, p in rules.location_exclude if p.search(place)), None)
                    for place in places]
         if all(matched):
             return f'location excluded ("{matched[0]}")'

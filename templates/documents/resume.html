@@ -31,8 +31,11 @@
   ul { margin: 0; padding-left: 18pt; list-style: disc; }
   li { margin-bottom: 2pt; padding-left: 2pt; }
   li::marker { font-size: 1.15em; }
-  .skills { columns: 2; column-gap: 24pt; }
-  .skills li { break-inside: avoid; }
+  /* One column only: multi-column layouts are where ATS parsers scramble text. */
+  .entry { margin: 4pt 0 1pt; }
+  .entry .tech { font-style: italic; }
+  .skills p { margin: 0 0 1pt; }
+  a { color: inherit; text-decoration: none; }
 </style>
 </head>
 <body>
@@ -40,34 +43,43 @@
     <h1>{{ contact.name }}</h1>
     <div class="contact">
       {{ [contact.location, contact.phone, contact.email] | select | join(" • ") }}<br>
-      {{ [contact.portfolio, contact.linkedin, contact.github] | select | join(" • ") }}
+      {% for l in [contact.portfolio, contact.linkedin, contact.github] | select %}<a href="https://{{ l }}">{{ l }}</a>{% if not loop.last %} • {% endif %}{% endfor %}
     </div>
   </header>
 
+  {% if draft.resume.summary %}
   <h2>Summary</h2>
   <p>{{ draft.resume.summary }}</p>
+  {% endif %}
 
   {# Education right after the summary: for a recent graduate the degree is
-     the first thing a recruiter looks for. #}
+     the first thing a recruiter looks for. The line comes from the profile's
+     Canonical headings, so it's identical on every resume. #}
+  {% set education = contact.education_line or draft.resume.education %}
   <h2>Education</h2>
   <ul>
-    <li>{{ draft.resume.education }}{% if contact.gpa and 'GPA' not in draft.resume.education %} | GPA: {{ contact.gpa }}{% endif %}</li>
+    <li>{{ education }}{% if contact.gpa and 'GPA' not in education %} | GPA: {{ contact.gpa }}{% endif %}</li>
     {% if draft.resume.coursework %}<li>Relevant Coursework: {{ draft.resume.coursework | join(", ") }}</li>{% endif %}
   </ul>
 
+  {# Projects are the main section: name | tools | link, then 1-3 bullets. #}
   <h2>Projects</h2>
-  <ul>
-    {% for p in draft.resume.projects %}<li>{{ p.name }}: {{ p.description }}</li>{% endfor %}
-  </ul>
+  {% for p in draft.resume.projects %}
+    {% set link = contact.project_links.get(p.name) if contact.project_links else None %}
+    <p class="entry"><b>{{ p.name }}</b>{% if p.tech %} | <span class="tech">{{ p.tech }}</span>{% endif %}{% if link %} | <a href="https://{{ link }}">{{ link }}</a>{% endif %}</p>
+    <ul>{% for b in p.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% endfor %}
 
   <h2>Experience</h2>
-  <ul>
-    {% for e in draft.resume.experience %}<li>{{ e.heading }}: {{ e.description }}</li>{% endfor %}
-  </ul>
+  {% for e in draft.resume.experience %}
+    <p class="entry"><b>{{ e.heading }}</b></p>
+    <ul>{% for b in e.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% endfor %}
+  {% if contact.additional_line %}<p class="entry"><b>Additional experience:</b> {{ contact.additional_line }}</p>{% endif %}
 
   <h2>Skills</h2>
-  <ul class="skills">
-    {% for s in draft.resume.skills %}<li>{{ s }}</li>{% endfor %}
-  </ul>
+  <div class="skills">
+    {% for s in draft.resume.skills %}<p><b>{{ s.label }}:</b> {{ s["items"] | join(", ") }}</p>{% endfor %}
+  </div>
 </body>
 </html>

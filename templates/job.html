@@ -17,6 +17,10 @@
       {% if job.target and tc %}
         <div class="small" style="margin-top:4px">★ Target company{% if tc.connection %} · your connection: {{ tc.connection }}{% endif %}</div>
       {% endif %}
+      {% for p in people_at(job.company) %}
+        <div class="small" style="margin-top:4px">👤 You know <b>{{ p.name }}</b> at {{ p.company }}{% if p.role %} ({{ p.role }}){% endif %}{% if p.how %} · {{ p.how }}{% endif %}
+          · <a href="{{ url_for('people', edit=p.id) }}">details</a></div>
+      {% endfor %}
       <div class="small subtle" style="margin-top:4px">
         {% if job.closed_at %}Closed {{ job.closed_at[:10] }} · {% endif %}
         Status: {{ job.status.replace('_', ' ') }}{% if job.filter_reason %} ({{ job.filter_reason }}){% endif %}
@@ -125,9 +129,12 @@
       <label for="notes">Why this company? <span class="subtle">(optional, your own words: what draws you to it,
       any personal connection. The letter's personal part is built from this and nothing is added to it.)</span></label>
     <textarea id="notes" name="notes" rows="3" style="margin-bottom:8px" placeholder="e.g. My family had a rough time with insurance when..."></textarea>
-      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1">
+      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="resume_only" value="1" checked>
         Resume only, no cover letter <span class="subtle">(for applications that don't take one; faster,
         since it skips the company research and the letter)</span></label>
+      <label class="checkbox" style="margin-bottom:8px"><input type="checkbox" name="check_gaps" value="1" checked>
+        Ask me about skill gaps first <span class="subtle">(skills the posting wants that your profile
+        doesn't show; "yes" answers are added to full-profile.md)</span></label>
       <button type="submit">Draft</button>
     </form>
   {% endif %}

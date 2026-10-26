@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Check first · {{ job.title }}{% endblock %}
+{% block content %}
+<h1>Before drafting: this posting has a requirement you may not meet</h1>
+<p class="subtle">{{ job.company }} · {{ job.title }} · <a href="{{ url_for('job_detail', job_id=job.id) }}">back to the job</a></p>
+
+<div class="panel">
+  <p class="small subtle">When this job was scored, Claude found these requirements, and each quote was
+    checked word for word against the posting. Two of your three rejections so far were ruled out
+    by requirements like these, so read them before spending a draft on it.</p>
+  {% for g in gates %}
+    <div style="margin:12px 0; padding-top:10px; border-top:1px solid var(--border)">
+      <b>{{ labels.get(g.gate, g.gate) }}</b>
+      <div class="small" style="margin-top:4px">The posting: “{{ g.quote }}”</div>
+    </div>
+  {% endfor %}
+  <p class="small subtle">If a quote is really "preferred" or has an alternative ("or equivalent"), it's
+    not a true requirement, and drafting anyway is reasonable.</p>
+
+  <form method="post" action="{{ url_for('draft_start', job_id=job.id) }}" class="row" style="gap:8px; margin-top:12px">
+    {# Everything from the Draft form, carried through unchanged. #}
+    {% for key, value in form.items(multi=True) %}{% if key != 'gates_ok' %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endif %}{% endfor %}
+    <input type="hidden" name="gates_ok" value="1">
+    <button type="submit">I've read this, draft anyway</button>
+    <a class="button secondary" href="{{ url_for('job_detail', job_id=job.id) }}">Don't draft</a>
+  </form>
+</div>
+{% endblock %}

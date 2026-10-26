@@ -21,7 +21,7 @@ open-posting check, and nightly runs.
 ## Setup
 
 1. **Python 3.10+** (developed on 3.13).
-2. **Packages**: `pip install pyyaml flask`
+2. **Packages**: `pip install pyyaml flask python-docx`
 3. **Claude Code CLI**, installed and logged in. Scoring runs `claude -p` as a
    subprocess and uses your Claude plan, so no API key is needed. Check it with
    `claude --version`.
@@ -42,7 +42,8 @@ already running, double-clicking again just reopens the browser tab.
 | **Fetch** | *Import* the SimplifyJobs new-grad list, run the *Wide sweep*, *Check now* for your target companies, or fetch one company's board (pick the ATS, type the slug) and *Refresh* boards you've fetched before. *Check top jobs* confirms your best jobs are still open. Shows the last nightly run and the last 7 days of Claude usage. |
 | **Score** | Pick how many this run (the cap), jobs per call, and the model, then *Start scoring*. Progress updates live; *Stop after this batch* ends a run early. *Preview prompt* shows exactly what Claude receives. |
 | **Feedback** | *Propose rules* from your disagreements, edit the proposal, and save it as `feedback.md`. You can also edit `feedback.md` directly here, and *Export ratings CSV*. |
-| **Applications** | Jobs you've drafted for or applied to, with each one's status (applied ones first). Start a draft from a job's page with *Draft resume & cover letter*; edit it, then *Save & generate PDFs*. |
+| **People** | People you know and where they work (name, company, their role, how you know them, notes). Jobs at their company show 👤 and their name in the job list and on the job's page, and each contact shows how many scored jobs their company has. Company names match on whole words, so "LCS Living" matches the board "lcs" but "Metabase" doesn't match "meta". |
+| **Applications** | Jobs you've drafted for or applied to, with each one's status (applied ones first). Start a draft from a job's page with *Draft resume & cover letter*; edit it, then *Save & generate files* (PDF and Word). |
 
 The app only listens on 127.0.0.1, so nothing outside your computer can reach it.
 It calls the same functions as the command-line scripts below, so you can use
@@ -119,6 +120,16 @@ hard gate (score capped at 2, see *Hard gates* below).
   for 30 days. About half the list is dead, so later sweeps are faster.
 - Since it downloads each board's full list, it also closes stored jobs that
   are no longer on their board.
+
+**Boards that moved.** A dead board often means the company switched ATS
+(Greenhouse -> Ashby is common), not that it closed, and none of the three
+redirects an old board name. `python find_moved_boards.py` tries each dead
+board's name on the other two ATSs, adds any live ones to `boards/`, and
+records old -> new in `data/moved_boards.json` (boards already resolved are
+skipped next time). `--dry-run` reports without changing anything, `--sample
+300` checks a random few, and `--variants` also tries renamed forms ("acme"
+-> "acmehq", "acme-ai" -> "acme"), which costs about 4x the requests and in a
+300-board test found 1 extra. Worth re-running every month or two.
 
 ### 1d. Check top jobs are still open
 
@@ -197,7 +208,10 @@ exact quote from the posting. Python checks that the quote really is in the
 posting, then caps the score: 5+ years required -> 3, 3-4 years -> 5;
 clearance, required credential, people management, a non-English language, or
 a non-US location -> 4; a role only for current students or later
-graduates ("Class of 2027", "currently pursuing a degree") -> 2. "Preferred" or "nice to have" never counts. A quote
+graduates ("Class of 2027", "currently pursuing a degree") -> 2. "Preferred" or "nice to have" never counts,
+and neither do ranges that start at 2 years or fewer ("0-3 years"), years with an
+alternative ("3+ years or a Master's"), or years that count internships. The caps
+live only in code: the rubric tells Claude to score the fit as if the gates weren't there. A quote
 that isn't in the posting is shown but not applied. `fit_score` keeps Claude's
 score before the cap, and the job page shows which gate capped it.
 
@@ -235,6 +249,14 @@ age as a badge ("today", "3d", "2w"; green for the last 3 days). Lists are
 sorted best score first and, among equal scores, newest first; *Newest first*
 sorts by date alone. Jobs you mark applied leave every list except the
 *Applied* tab and the Applications page.
+
+**Older than 14 days.** Postings more than 14 days old (by posting date, or
+when first found if the source gives none) leave the Scored, To score and
+Listing only tabs for their own *Older than 14 days* tab. They're kept, with
+their scores and ratings, not deleted, but they aren't scored, re-checked or
+offered for rating, so no Claude usage goes to them. Jobs at your target
+companies stay put whatever their age. Change the age with `MAX_AGE_DAYS` in
+`db.py`.
 
 ### 3. Rate the scored jobs yourself
 
@@ -288,6 +310,22 @@ From a job's page, click **Draft resume & cover letter** (or run
 `python drafter.py <job id>`). In a few minutes you get a one-page resume and a
 cover letter tailored to that job, written from `full-profile.md`:
 
+- **Requirements check first.** If scoring found a requirement you can't meet
+  (5+ years, a clearance, current students only...) and its quote was verified
+  in the posting, *Draft* first shows those requirements in the posting's own
+  words. *I've read this, draft anyway* continues with everything you entered;
+  *Don't draft* goes back. Jobs without such requirements draft straight away.
+- **Skill check first** (on by default; the *Ask me about skill gaps first*
+  box). One quick Sonnet call (about 10 seconds) lists what the posting asks
+  for that `full-profile.md` doesn't show, each with the posting's exact
+  words. Python drops any whose quote isn't really in the posting, any the
+  profile already names, and any you've answered before. You answer each
+  Yes (with a line on where and how) or No, or skip it. **Yes** answers are
+  added to `full-profile.md` under *Skills -> Confirmed while drafting*, in
+  your words, so this draft and every later one can use them. **No** answers
+  are remembered (`skill_answers` table) and never asked again. If nothing is
+  missing, drafting starts straight away.
+
 0. **Company research** (Claude Sonnet with web search, `research.py`): the
    company's stated mission and values, culture, products, recent news, and
    early-career programs, each with a source link and the company's exact
@@ -303,23 +341,52 @@ cover letter tailored to that job, written from `full-profile.md`:
    researched company value each paragraph answers. Facts from your "Why this
    company?" notes that your profile lacks are listed under *Add to your
    profile?* (the profile itself is never edited).
+
+   **Letter shape** (your rules from Oct 23, 2026, in `full-profile.md` ->
+   *Letter rules from the outside review*): 3 paragraphs, 250-350 words. (1)
+   The role and your strongest evidence for it; (2) one story told as what you
+   checked, found and changed (bug and verification stories are welcome when
+   relevant); (3) one specific tie to the company, then relocation for on-site
+   roles outside Southern California, and stop. Requirements are shown through
+   what you did, never echoed back ("the language your posting asks for"). The
+   drafter also sees the first and last paragraphs of your 10 most recent
+   letters (`<recent_letters>`) and must not reuse their openings, closings or
+   story framings.
 2. **Truth check** (a second, separate Opus call): compares every claim with
    `full-profile.md` and fixes anything invented, overstated, marked
    `[confirm]`, or pointing out a gap. Its fixes and suggestions are listed at
    the top of the editor.
-3. **Code checks**: skills not found in the profile are removed; banned phrases
-   ("I am writing to apply", "learn whatever"...), em dashes, and more than 3
-   colons in the letter are flagged (also when you save edits).
+3. **Code checks**: skills not found in the profile are removed (whole terms,
+   so "R" can't match inside another word); banned phrases ("I am writing to
+   apply", stock closers like "excited for the opportunity", "leveraged"...),
+   em dashes, more than 3 colons, a letter outside 250-350 words or not 3
+   paragraphs, and any 8-word phrase repeated from another of your letters
+   are flagged.
 
-Then edit any line in the app and click **Save & generate PDFs**. The PDFs use
+**Resume layout.** Header, a one-sentence summary, Education, Projects (the main
+section: the 2 most relevant get 2-3 bullets, a tools line and their repo link;
+two more get one bullet), Experience, then Skills as labeled lines. The education
+line, experience headings, project names and links, and the "Additional
+experience" line (retail and lifeguarding) come from the **Canonical headings**
+section of `full-profile.md` and print exactly as written there; a draft or an
+edit that rewords one is put back, or flagged if it can't be matched. Drafts
+made before Oct 23, 2026 open and render in this layout automatically.
+
+Then edit any line in the app and click **Save & generate files**. The PDFs use
 the same layout and font (Cambria) as your current resume, printed by Microsoft
 Edge, and land in `applications/<Company - Role>/` (the HTML and draft JSON are
 in its `source/` folder). If the resume runs past one page, you're told so.
+Word (`.docx`) copies of both are written next to them (`docx_export.py`, with
+python-docx), for sites that want Word or parse it better: same text, order
+and font, at the font size that fit the PDF on one page. They're plain
+paragraphs and real Word bullets (no tables, text boxes or headers), which
+resume parsers read most reliably. Word lays text out itself, so open the
+resume once to check it's still one page.
 The resume header shows your location (with "open to relocation"), phone and
 email, and Education (with your GPA from `full-profile.md`) comes right after
 the Summary, since a recruiter looks for a recent graduate's degree first.
 Two postings with the same company and title share one folder, so drafting
-the second overwrites the first one's PDFs.
+the second overwrites the first one's files.
 
 **Feedback and revision.** On a draft, *Get feedback on the letter* has Claude
 review the current cover letter (about a minute): whether each story fits
@@ -329,16 +396,27 @@ are prefilled into a box: edit them, add your own notes, and *Revise the
 letter* rewrites only the cover letter (truth-checked again; the resume is
 untouched). The letterhead can be switched off per draft with a checkbox.
 
-**Resume only.** For applications that don't take a cover letter, tick
+**Resume only** is ticked by default (letters matter most at small companies,
+startups, mission-driven orgs and referrals). For applications that don't take a cover letter, keep
 *Resume only* on the Draft (or Redraft) form. The draft skips the company
 research and the letter, so it's quicker; the truth check covers only the
-resume, and *Save & generate PDFs* makes just the resume PDF (removing a cover
-letter PDF left from an earlier full draft of the same job). Redraft without
+resume, and *Save & generate files* makes just the resume (removing cover
+letter files left from an earlier full draft of the same job). Redraft without
 the box ticked to get a letter later. From the command line:
 `python drafter.py <job id> --resume-only`.
 
-`full-profile.md` is the only source of facts and is never edited by the
-drafter. Keep it up to date: new facts there show up in the next draft.
+`full-profile.md` is the only source of facts. The drafter edits it in one
+place only: your Yes answers from the skill check. Keep it up to date: new
+facts there show up in the next draft.
+
+**Versions.** Every draft keeps its history in the `draft_versions` table:
+*generated* (as the drafter wrote it), *revised* (after a letter revision),
+*rendered* (each *Save & generate*), and *sent*. When you first mark a job
+applied, the current PDF and Word files are copied into a `sent <date>` folder
+next to them, so a later redraft can't overwrite what the company got. The
+draft page's *Versions* panel lists them and shows what you changed by hand
+from the generated draft, which is the best guide to what the prompts should
+do differently.
 
 ## Tracking applications
 
@@ -347,6 +425,18 @@ Every job page (and draft page) has an **Application status** panel. Click
 Applied -> Interviewing -> Offer or Rejected, each with an optional note
 ("phone screen 10/12"). The panel shows the full history, and *Undo / clear
 history* removes it if you clicked by mistake.
+
+**Reached out for a referral.** If you know someone at the company, ask them
+for a referral first, then click **Reached out for a referral** (the note box
+is for who you asked). The job leaves the working lists like an applied one,
+but `applied_at` isn't set, and the panel shows the date to apply by. If you
+still haven't marked it applied 2 days later (`REMINDER_DAYS` in `db.py`), you
+get a Windows notification (`remind.py`, run hourly by the **Job Sourcer
+Reminders** task, once per reach-out), a red banner on every page of the app
+until you mark it applied, and a line in the nightly notification. Mark it
+applied when you apply, whether through the referral or directly.
+Turn the hourly task off with `Disable-ScheduledTask -TaskName "Job Sourcer
+Reminders"`.
 
 Applied jobs get a status pill everywhere they're listed, their own **Applied**
 tab on the Jobs page (most recent first), and a place at the top of the
@@ -368,7 +458,17 @@ usage, and any step that failed (`notify.py`; try it with
   was off), it runs as soon as it can. You need to be logged in.
 - It runs with `pythonw`, so no window appears. Output goes to
   `data/logs/nightly-<date>.log`, and the Fetch page shows the last run's result.
-- A lock file stops two nightly runs overlapping.
+- A lock file stops two nightly runs overlapping, and the app won't start a
+  scoring run while the nightly one is going (both would score the same jobs).
+- It keeps the PC awake until it finishes (Windows' `SetThreadExecutionState`),
+  so the machine can't fall asleep halfway through a long run.
+- Quiet failures are called out in the notification:
+  - An expired Claude login stops scoring at once and the notification says
+    "Claude login expired: run `claude /login`" instead of looking like a quiet night.
+  - Scoring shows how many failed and how many are still waiting.
+  - If the sweep reaches less than half its usual boards, or the Simplify list
+    shrinks by half, or new jobs drop below a quarter of the usual (the median of
+    the last 7 runs), it warns "low volume".
 - Run it now: Task Scheduler -> Job Sourcer Nightly -> Run, or `python nightly.py`.
 - Turn it off: Task Scheduler -> Job Sourcer Nightly -> Disable, or in
   PowerShell `Disable-ScheduledTask -TaskName "Job Sourcer Nightly"`.
@@ -401,6 +501,9 @@ location:
 - Matching is case-insensitive and whole-word: `data` matches "Data Engineer"
   but not "Metadata", and `engineer` does **not** match "Engineering" (list both).
 - Blank locations always pass. The filter is meant to drop only obvious mismatches.
+- A place that's clearly in the US is never excluded, even if a word in it is on the
+  exclude list: "United States", "USA" or "US", or a US state after a comma ("Vienna, VA",
+  "Dublin, Ohio", "Berlin, CT"), unless it also names another country.
 - Edits take effect before the next scoring run: every unscored job is
   re-checked and its priority recomputed. Jobs that are already scored are never touched.
 - The `priority` section only sets scoring order; it never filters anything out.
@@ -416,13 +519,16 @@ location:
 | `fetch.py` | `run_fetch()`: fetch one board -> save to the database -> filter -> summary. Also a command. |
 | `import_feed.py` | `run_import()`: import the SimplifyJobs list (see 1b). Also a command. |
 | `sweep.py` | `run_sweep()`: the wide sweep (see 1c). Also a command. |
-| `boards/*.json` | The ~15,900 board names the sweep checks (from the Job Search Kit). |
+| `boards/*.json` | The ~15,900 board names the sweep checks (from the Job Search Kit, plus moved boards found by `find_moved_boards.py`). |
+| `find_moved_boards.py` | Finds the new ATS of boards that went dead (see 1c). |
 | `liveness.py` | `check_open()`: confirm top jobs are still open (see 1d). Also a command. |
 | `nightly.py` | The nightly run: every step above in order, logged. |
 | `targets.py`, `companies.yaml` | `run_targets()`: check every posting at your target companies (see 1e). Also a command. |
 | `sources/laserfiche.py`, `oracle.py`, `meta.py`, `browser.py` | Readers for target companies that aren't on the three ATS boards. |
-| `drafter.py` | `make_draft()` (research -> tailor -> truth check -> code checks) and `render()` (HTML -> PDF with Edge). Also a command. |
+| `drafter.py` | `make_draft()` (research -> tailor -> truth check -> code checks) and `render()` (HTML -> PDF with Edge, plus Word files). Also a command. |
+| `docx_export.py` | The resume and cover letter as Word files, built with python-docx. |
 | `research.py` | `get_research()`: web research on a job's company, quotes checked against their pages, cached per company. Also a command: `python research.py <job id>`. |
+| `remind.py` | Windows "time to apply" notification for jobs you reached out about 2+ days ago (run hourly by Task Scheduler). |
 | `notify.py` | `notify(title, message)`: a Windows notification, through PowerShell. |
 | `templates/documents/` | The resume and cover letter page layouts. |
 | `sources/simplify.py` | Reads Simplify's `listings.json` and works out which ATS, board, and job ID each posting link points to. |

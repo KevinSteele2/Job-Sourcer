@@ -30,19 +30,75 @@ LOCK_PATH = ROOT / "data" / "nightly.lock"
 STALE_LOCK_HOURS = 3   # a lock older than this is from a crashed run
 
 
+# Windows power flags for SetThreadExecutionState. Task Scheduler wakes the PC
+# to start the run, but nothing stops it going back to sleep partway through
+# (a 20-minute run can turn into hours). ES_SYSTEM_REQUIRED says "this program
+# needs the computer awake"; ES_CONTINUOUS keeps that in force until it's
+# cleared. The display can still turn off.
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def _stay_awake(on: bool) -> None:
+    """Ask Windows not to sleep while the run is going (on=False clears it).
+    Best effort: on other systems, or if the call fails, nothing happens."""
+    try:
+        import ctypes
+        flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED if on else ES_CONTINUOUS
+        ctypes.windll.kernel32.SetThreadExecutionState(flags)
+    except Exception:
+        pass
+
+
+def is_running() -> bool:
+    """A nightly run holds the lock (and it's not left over from a crash).
+    The app checks this so a manual scoring run can't score the same jobs
+    at the same time."""
+    return LOCK_PATH.exists() and (time.time() - LOCK_PATH.stat().st_mtime) / 3600 < STALE_LOCK_HOURS
+
+
 def _acquire_lock() -> bool:
     """Make sure only one nightly run happens at a time."""
-    if LOCK_PATH.exists():
-        age_hours = (time.time() - LOCK_PATH.stat().st_mtime) / 3600
-        if age_hours < STALE_LOCK_HOURS:
-            return False
+    if is_running():
+        return False
     LOCK_PATH.write_text(str(os.getpid()), encoding="utf-8")
     return True
+
+
+# Volume checks: (step, field, fraction). Tonight's value below this fraction
+# of the median of the last 7 runs means something broke quietly (a network
+# outage, a source that stopped answering) even though no step failed.
+VOLUME_CHECKS = [("sweep", "checked", 0.5), ("import_simplify", "listings", 0.5),
+                 ("sweep", "added", 0.25)]   # new jobs vary night to night, so a lower bar
+
+
+def volume_warnings(record: dict) -> list[str]:
+    """Steps whose volume tonight is far below the recent median."""
+    try:
+        past = [json.loads(line) for line in RUNS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except FileNotFoundError:
+        return []
+    past = [r for r in past if r.get("started") != record.get("started")][-7:]
+    warnings = []
+    for step, field, fraction in VOLUME_CHECKS:
+        values = sorted(v for r in past if isinstance(v := (r.get(step) or {}).get(field), (int, float)))
+        tonight = (record.get(step) or {}).get(field)
+        if len(values) < 3 or tonight is None:
+            continue   # not enough history, or the step didn't run
+        median = values[len(values) // 2]
+        if median and tonight < median * fraction:
+            warnings.append(f"{step} {field} only {tonight} (usually ~{median})")
+    return warnings
 
 
 def summary_message(record: dict, started: str) -> tuple[str, str]:
     """(title, message) for the end-of-run notification."""
     import db  # imported here, like the steps in run_nightly
+    score = record.get("score") or {}
+    if "login expired" in (score.get("stopped_reason") or ""):
+        # Every Claude call will fail until this is fixed, so say only that.
+        return ("Job Sourcer: Claude login expired",
+                "Nothing was scored. Open a terminal and run: claude /login")
     parts = []
     found = sum((record.get(step) or {}).get("added", 0) for step in ("import_simplify", "sweep"))
     parts.append(f"{found} new jobs")
@@ -58,7 +114,6 @@ def summary_message(record: dict, started: str) -> tuple[str, str]:
             parts.insert(0, f"★ {new_targets} new at your target companies")
         if failed:
             parts.append(f"couldn't check {', '.join(failed)}")
-    score = record.get("score") or {}
     if score:
         conn = db.connect()
         good = conn.execute("""
@@ -68,17 +123,28 @@ def summary_message(record: dict, started: str) -> tuple[str, str]:
         day_ago = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400))
         cost = sum(u["cost_usd"] or 0 for u in db.usage_summary(conn, day_ago))
         conn.close()
-        parts.append(f"scored {score.get('scored', 0)}, {good} at 7+")
+        failed_note = f" ({score['failed']} failed)" if score.get("failed") else ""
+        parts.append(f"scored {score.get('scored', 0)}{failed_note}, {good} at 7+, "
+                     f"{score.get('remaining', 0)} still waiting")
         if score.get("stopped_reason"):
             parts.append(f"scoring stopped ({score['stopped_reason'][:60]})")
         parts.append(f"Claude today ${cost:.2f}")
     closed = (record.get("check_open") or {}).get("closed", 0)
     if closed:
         parts.append(f"{closed} postings closed")
-    if record["status"] == "ok":
+    conn = db.connect()
+    due = len(db.apply_reminders(conn))  # reached out 2+ days ago, not applied yet
+    conn.close()
+    if due:
+        parts.insert(0, f"{due} job{'s' if due > 1 else ''} to apply to (no referral reply)")
+    low = volume_warnings(record)
+    if low:
+        parts.insert(0, "⚠ low volume: " + "; ".join(low))
+    if record["status"] == "ok" and not low:
         return "Job Sourcer: nightly run done", " · ".join(parts)
+    status = "" if record["status"] == "ok" else f"{record['status']}. "
     return ("Job Sourcer: nightly run had problems",
-            f"{record['status']}. " + " · ".join(parts) + ". See data/logs/.")
+            status + " · ".join(parts) + ". See data/logs/.")
 
 
 def run_nightly() -> dict:
@@ -135,9 +201,11 @@ def main() -> None:
         if not _acquire_lock():
             print("Another nightly run is still going; exiting.", flush=True)
             return
+        _stay_awake(True)
         try:
             outcome = run_nightly()
         finally:
+            _stay_awake(False)
             LOCK_PATH.unlink(missing_ok=True)
 
         status = "ok" if not outcome["failed"] else "failed: " + ", ".join(outcome["failed"])
