@@ -313,15 +313,29 @@ Respond with ONLY a JSON object, no other text and no code fences:
 {{
   "issues": [{{"location": "e.g. resume.projects[2]", "severity": "must_fix" or "suggestion",
               "problem": "what's wrong", "fix": "what you changed (must_fix only)"}}],
-  "draft": <the full draft with every must_fix issue corrected, same shape as given>
+  "draft": <the full draft with every must_fix issue corrected, same shape as given>,
+  "evidence": [{{"location": "resume.projects[0].bullets[1]", "claim": "the fact, briefly",
+                "quote": "exact words from the source that state it", "from": "profile"}}]
 }}
+"evidence" covers the CORRECTED draft: one entry for every fact about the
+candidate or the company in resume.summary, every resume.projects[i].bullets[j],
+every resume.experience[i].bullets[j] and every cover_letter.paragraphs[i]
+(0-based, as in the corrected draft). "quote" is copied word for word from
+<profile> ("from": "profile"), <candidate_notes> ("notes"), <job> ("job") or
+<company_research> ("research"): no paraphrase, no fixing typos, at least 8
+characters; use "..." only to skip words between two exact pieces. Facts
+about the candidate must be quoted from profile or notes, never from the job.
+Code checks each quote against its source, so a claim you can't quote is a
+claim to fix."""
+AUDIT_INSTRUCTIONS += """
+
 Last, a flow pass: after your fixes, read the corrected letter top to bottom
 as the hiring manager would. A fix to one paragraph often breaks the next
 one's opening. Repair any transition that no longer follows, any reference
 without a clear antecedent, and any repetition, and report each as a
 must_fix with location "flow".
 
-If nothing needs fixing, return "issues": [] and the draft unchanged.
+If nothing needs fixing, return "issues": [], the draft unchanged, and its evidence.
 The page templates add the candidate's name, contact header, date and
 signature; don't flag those as missing."""
 
@@ -579,10 +593,81 @@ def tailor(profile: str, job, model: str, notes: str = "",
     return validate_draft(_parse_json_object(text), resume_only), used_model
 
 
+def _plain(text: str) -> str:
+    """Normalized for quote matching, with markdown bold/code marks removed
+    (the profile is markdown; quotes of it usually drop the ** marks)."""
+    return scorer._normalize(re.sub(r"\*\*|`", "", text or ""))
+
+
+def evidence_locations(draft: dict) -> dict[str, str]:
+    """Every line of the draft that states facts: {location: its text}."""
+    resume = draft.get("resume") or {}
+    found = {}
+    if resume.get("summary"):
+        found["resume.summary"] = resume["summary"]
+    for key in ("projects", "experience"):
+        for i, entry in enumerate(resume.get(key) or []):
+            for j, bullet in enumerate(entry.get("bullets") or []):
+                found[f"resume.{key}[{i}].bullets[{j}]"] = bullet
+    for i, para in enumerate((draft.get("cover_letter") or {}).get("paragraphs") or []):
+        found[f"cover_letter.paragraphs[{i}]"] = para
+    return found
+
+
+def _location_label(location: str, draft: dict) -> str:
+    """resume.projects[0].bullets[1] -> 'Resume, Job Search Agent, bullet 2'."""
+    m = re.match(r"resume\.(projects|experience)\[(\d+)\]\.bullets\[(\d+)\]", location)
+    if m:
+        entries = draft["resume"].get(m.group(1)) or []
+        i = int(m.group(2))
+        name = (entries[i].get("name") or entries[i].get("heading")) if i < len(entries) else m.group(1)
+        return f"Resume, {name}, bullet {int(m.group(3)) + 1}"
+    m = re.match(r"cover_letter\.paragraphs\[(\d+)\]", location)
+    if m:
+        return f"Letter, paragraph {int(m.group(1)) + 1}"
+    return "Resume summary" if location == "resume.summary" else location
+
+
+def check_evidence(evidence, draft: dict, sources: dict[str, str]) -> list[str]:
+    """Check the truth checker's quotes with code instead of trusting it.
+
+    A quote counts only if it's really in the source it names (pieces split
+    on "..." must each be there), and facts on the resume must be quoted from
+    the profile or Kevin's notes, not the posting. Returns warnings for quotes
+    that aren't found and for lines of the draft with no verified quote.
+    """
+    haystacks = {name: _plain(text) for name, text in sources.items() if text}
+    lines = evidence_locations(draft)
+    backed, warnings = set(), []
+    for e in evidence if isinstance(evidence, list) else []:
+        if not isinstance(e, dict):
+            continue
+        location = str(e.get("location", "")).strip()
+        source = str(e.get("from", "")).strip().lower()
+        if location.startswith("resume") and source not in ("profile", "notes"):
+            source = ""  # a resume fact backed only by the posting isn't backed
+        pieces = [_plain(p).strip(" \"'.,") for p in re.split(r"\.\.\.|…", str(e.get("quote", "")))]
+        pieces = [p for p in pieces if p]
+        hay = haystacks.get(source, "")
+        if pieces and sum(map(len, pieces)) >= 8 and all(p in hay for p in pieces):
+            backed.add(location)
+        elif location in lines:
+            warnings.append(f'{_location_label(location, draft)}: the truth check\'s source for '
+                            f'"{e.get("claim", "")}" isn\'t in your {source or "profile"} '
+                            f'(it quoted "{str(e.get("quote", ""))[:120]}"). Check this claim.')
+    for location, text in lines.items():
+        if location not in backed and not any(w.startswith(_location_label(location, draft) + ":")
+                                              for w in warnings):
+            warnings.append(f'{_location_label(location, draft)}: no quote from your profile backs '
+                            f'"{text[:90]}{"..." if len(text) > 90 else ""}". Check it.')
+    return warnings
+
+
 def truth_check(profile: str, job, draft: dict, model: str, notes: str = "",
-                research: dict | None = None) -> tuple[dict, list]:
-    """Returns (corrected draft, issues). If the check itself fails, the
-    original draft is kept and the failure is reported as an issue."""
+                research: dict | None = None) -> tuple[dict, list, list[str]]:
+    """Returns (corrected draft, issues, evidence warnings). If the check
+    itself fails, the original draft is kept and the failure is reported as
+    an issue."""
     resume_only = draft.get("resume_only") is True
     audit = AUDIT_INSTRUCTIONS + (RESUME_ONLY_AUDIT_NOTE if resume_only else "")
     prompt = (f"{audit}\n\n<profile>\n{profile}\n</profile>{notes_block(notes)}\n\n"
@@ -592,10 +677,13 @@ def truth_check(profile: str, job, draft: dict, model: str, notes: str = "",
         text, _ = scorer.call_claude(prompt, model, stage="truth_check")
         result = _parse_json_object(text)
         issues = [i for i in result.get("issues", []) if isinstance(i, dict)]
-        return validate_draft(result.get("draft"), resume_only), issues
+        checked = validate_draft(result.get("draft"), resume_only)
     except (scorer.ScoringError, DraftError) as e:
         return draft, [{"location": "truth check", "severity": "must_fix",
-                        "problem": f"The truth check didn't complete ({e}). Review every line yourself."}]
+                        "problem": f"The truth check didn't complete ({e}). Review every line yourself."}], []
+    sources = {"profile": profile, "notes": notes, "job": job_block(job),
+               "research": company_research.research_block(research)}
+    return checked, issues, check_evidence(result.get("evidence"), checked, sources)
 
 
 # ---------- Skill gaps: asked before drafting ----------
@@ -907,9 +995,10 @@ def make_draft(job_id: int, model: str = DEFAULT_MODEL, on_step=None, notes: str
                                letters[:RECENT_LETTERS])
     step("Truth check: comparing every claim with your profile"
          + ("" if resume_only else " and the research"))
-    draft, issues = truth_check(profile, job, draft, model, notes, research)
+    draft, issues, evidence_warnings = truth_check(profile, job, draft, model, notes, research)
     step("Final checks")
     draft, warnings = code_checks(profile, draft, letters)
+    warnings = evidence_warnings + warnings
     draft["candidate_notes"] = notes.strip()
 
     review = {"issues": issues, "warnings": warnings, "research": research}
@@ -1197,13 +1286,14 @@ def revise_letter(job_id: int, feedback: str, model: str = DEFAULT_MODEL, on_ste
                              "closing": letter.get("closing") or "Sincerely,", "show_header": show_header}
 
     step("Truth check on the revised letter")
-    checked, issues = truth_check(profile, job, draft, model, notes, research)
+    checked, issues, evidence_warnings = truth_check(profile, job, draft, model, notes, research)
     draft["cover_letter"] = {**checked["cover_letter"], "show_header": show_header}  # keep the resume as it was
     # Only the letter's fixes were kept, so only report those (resume "fixes"
     # the check made were thrown away with its copy of the resume).
     issues = [i for i in issues if not str(i.get("location", "")).lower().startswith("resume")]
     step("Final checks")
     draft, warnings = code_checks(profile, draft, letters)
+    warnings = [w for w in evidence_warnings if w.startswith("Letter")] + warnings
 
     review = json.loads(app_row["review"] or "{}")
     review["issues"] = issues

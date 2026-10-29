@@ -109,6 +109,13 @@ the Job Search Kit) and keeps postings that are new, were posted within
 and pass `filters.yaml` (all in `feeds.yaml` -> `sweep`). Keep those keywords
 targeted: the sweep sees every job at every company.
 
+Plain titles with no level ("Software Engineer", "Data Engineer", listed in
+`broad_title_keywords`) are where many entry-level jobs hide, but they're also
+how mid and senior jobs are posted. So a plain-title match is kept only when
+its description asks for at most `broad_max_years` (default 2) years of
+experience, or names no number. Seniority words and foreign locations are
+checked first, so Greenhouse descriptions are only fetched for plausible ones.
+
 The keywords include `intern` and `internship` (whole words, so "Internal"
 and "International" titles don't match). Internships open to recent graduates
 are scored like any job; ones only for current students get the enrollment
@@ -355,7 +362,13 @@ cover letter tailored to that job, written from `full-profile.md`:
 2. **Truth check** (a second, separate Opus call): compares every claim with
    `full-profile.md` and fixes anything invented, overstated, marked
    `[confirm]`, or pointing out a gap. Its fixes and suggestions are listed at
-   the top of the editor.
+   the top of the editor. It also returns its **evidence**: for each resume
+   bullet, the summary and each letter paragraph, the exact words in the
+   profile (or your notes, the posting, the research) that back it. Python
+   then checks each quote really is in that source, the same way hard-gate
+   quotes are checked, so the check doesn't rest on the model's word. Resume
+   facts must be quoted from the profile or your notes, never the posting. A
+   quote that isn't found, or a line with no quote, becomes a warning.
 3. **Code checks**: skills not found in the profile are removed (whole terms,
    so "R" can't match inside another word); banned phrases ("I am writing to
    apply", stock closers like "excited for the opportunity", "leveraged"...),

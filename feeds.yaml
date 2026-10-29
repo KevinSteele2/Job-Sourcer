@@ -40,6 +40,27 @@ sweep:
     # in scoring, which caps them at 2, so they sink to the bottom.
     - intern
     - internship
+  # Plain titles with no level ("Software Engineer", "Data Engineer"). Many
+  # entry-level jobs are posted like this, but so are mid and senior ones, so
+  # a match here is kept only when the posting asks for at most
+  # broad_max_years of experience, or doesn't say. Titles with "Senior",
+  # "Staff"... are already dropped by filters.yaml.
+  broad_title_keywords:
+    - software engineer
+    - software engineering
+    - backend engineer
+    - back-end engineer
+    - back end engineer
+    - frontend engineer
+    - front-end engineer
+    - front end engineer
+    - full stack engineer
+    - full-stack engineer
+    - fullstack engineer
+    - full stack developer
+    - full-stack developer
+    - data engineer
+  broad_max_years: 2
   lookback_days: 7
   # Boards checked at the same time. Higher is faster but less polite.
   workers: 8

@@ -7,7 +7,9 @@ The board lists in boards/ come from the Job Search Kit's slug cache. For each
 board, the sweep downloads the job list and keeps postings that:
   - aren't stored yet,
   - were posted within `lookback_days` (feeds.yaml -> sweep),
-  - have a title containing one of `title_keywords`, and
+  - have a title containing one of `title_keywords`, or one of
+    `broad_title_keywords` with a posting that asks for at most
+    `broad_max_years` of experience (or doesn't say), and
   - pass filters.yaml.
 Jobs it keeps are stored with feed = "sweep" and go through scoring like any
 other job. A full sweep takes roughly 15-20 minutes.
@@ -52,6 +54,8 @@ LIST_URLS = {
 def load_config() -> dict:
     config = (yaml.safe_load(FEEDS_PATH.read_text(encoding="utf-8")) or {}).get("sweep") or {}
     return {"title_keywords": config.get("title_keywords") or [],
+            "broad_title_keywords": config.get("broad_title_keywords") or [],
+            "broad_max_years": config.get("broad_max_years", 2),
             "lookback_days": config.get("lookback_days", 7),
             "workers": config.get("workers", 8)}
 
@@ -94,7 +98,8 @@ def _posted_at(ats: str, raw: dict) -> datetime | None:
         return None
 
 
-def _check_board(ats: str, slug: str, keywords, rules, since: datetime, known: set) -> dict:
+def _check_board(ats: str, slug: str, keywords, broad, max_years: int, rules,
+                 since: datetime, known: set) -> dict:
     """Runs in a worker thread: one board's list -> what's on it and what's new.
 
     Returns {"ids": every job ID on the board, "new": [Job, ...]}. Makes no
@@ -119,7 +124,14 @@ def _check_board(ats: str, slug: str, keywords, rules, since: datetime, known: s
             dates[job_id] = iso_utc(posted.isoformat())
         if (ats, slug, job_id) in known or (posted and posted < since):
             continue
-        if not any(p.search(title) for _, p in keywords):
+        # A plain title ("Software Engineer") only counts if the posting turns
+        # out to ask for few years, which needs the description.
+        plain = not any(p.search(title) for _, p in keywords)
+        if plain and not any(p.search(title) for _, p in broad):
+            continue
+        # Plain titles are common, so drop seniority and location misses
+        # before spending a Greenhouse request on the description.
+        if plain and ats == "greenhouse" and filters.check(title, location, rules):
             continue
         # Build the full Job. Greenhouse's list has no description, so a
         # match costs one more request; Lever and Ashby lists already have it.
@@ -133,8 +145,13 @@ def _check_board(ats: str, slug: str, keywords, rules, since: datetime, known: s
         else:
             job = (lever if ats == "lever" else ashby)._to_job(raw, slug)
         # filters.yaml needs the location, which Lever/Ashby only give in full.
-        if filters.check(job.title, job.location or location, rules) is None:
-            new.append(job)
+        if filters.check(job.title, job.location or location, rules) is not None:
+            continue
+        if plain:
+            years = filters.min_years_asked(job.description)
+            if years is not None and years > max_years:
+                continue
+        new.append(job)
     return {"ids": ids, "new": new, "dates": dates}
 
 
@@ -145,6 +162,7 @@ def run_sweep(on_progress=None, should_stop=None) -> dict:
     """
     config = load_config()
     keywords = [(kw, filters._keyword_pattern(kw)) for kw in config["title_keywords"]]
+    broad = [(kw, filters._keyword_pattern(kw)) for kw in config["broad_title_keywords"]]
     if not keywords:
         raise ValueError("feeds.yaml -> sweep -> title_keywords is empty")
     rules = filters.load_rules()
@@ -162,7 +180,8 @@ def run_sweep(on_progress=None, should_stop=None) -> dict:
     lock = threading.Lock()  # `known` is read by workers while the main thread adds to it
 
     with ThreadPoolExecutor(max_workers=config["workers"]) as pool:
-        futures = {pool.submit(_check_board, ats, slug, keywords, rules, since, known): (ats, slug)
+        futures = {pool.submit(_check_board, ats, slug, keywords, broad,
+                               config["broad_max_years"], rules, since, known): (ats, slug)
                    for ats, slug in boards}
         for done, future in enumerate(as_completed(futures), 1):
             ats, slug = futures[future]
